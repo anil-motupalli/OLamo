@@ -23,8 +23,10 @@ from main import (
     PM_MAIN_MODEL,
     SONNET_MODEL,
     _ALL_REVIEWERS,
+    AgentEngineConfig,
     AppSettings,
     ApprovalGate,
+    ModelConfig,
     OLamoDb,
     RunRecord,
     RunManager,
@@ -123,6 +125,51 @@ class TestAppSettings:
         d = asdict(s)
         restored = AppSettings(**d)
         assert restored == s
+
+
+# ── ModelConfig ───────────────────────────────────────────────────────────────
+
+class TestModelConfig:
+    def test_defaults(self):
+        m = ModelConfig()
+        assert m.mode == "simple"
+        assert m.model == ""
+        assert m.provider_type == "openai"
+        assert m.base_url == ""
+        assert m.api_key == ""
+        assert m.extra_params == {}
+
+    def test_advanced_mode(self):
+        m = ModelConfig(mode="advanced", model="gpt-4", base_url="https://api.example.com", api_key="sk-test")
+        assert m.mode == "advanced"
+        assert m.model == "gpt-4"
+        assert m.base_url == "https://api.example.com"
+
+    def test_extra_params_default_independent(self):
+        m1 = ModelConfig()
+        m2 = ModelConfig()
+        m1.extra_params["key"] = "val"
+        assert m2.extra_params == {}
+
+
+# ── AgentEngineConfig ─────────────────────────────────────────────────────────
+
+class TestAgentEngineConfig:
+    def test_defaults(self):
+        c = AgentEngineConfig()
+        assert c.engine == "claude"
+        assert isinstance(c.model_config, ModelConfig)
+        assert c.mcp_servers == {}
+
+    def test_copilot_engine(self):
+        c = AgentEngineConfig(engine="copilot")
+        assert c.engine == "copilot"
+
+    def test_mcp_servers_default_independent(self):
+        c1 = AgentEngineConfig()
+        c2 = AgentEngineConfig()
+        c1.mcp_servers["test"] = {}
+        assert c2.mcp_servers == {}
 
 
 # ── RunRecord ─────────────────────────────────────────────────────────────────

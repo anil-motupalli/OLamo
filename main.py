@@ -85,6 +85,23 @@ class AppSettings:
     orchestration_mode: str = "pm"  # "pm" (sub-agent) | "orchestrated" (Python-driven)
 
 
+@dataclass
+class ModelConfig:
+    mode: str = "simple"           # "simple" | "advanced"
+    model: str = ""                # model name; "" = use smart default
+    provider_type: str = "openai"  # "openai" | "azure" | "anthropic"
+    base_url: str = ""
+    api_key: str = ""
+    extra_params: dict = field(default_factory=dict)
+
+
+@dataclass
+class AgentEngineConfig:
+    engine: str = "claude"         # "claude" | "copilot"
+    model_config: ModelConfig = field(default_factory=ModelConfig)
+    mcp_servers: dict[str, dict] = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------

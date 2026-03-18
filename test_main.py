@@ -1,0 +1,941 @@
+"""Tests for OLamo pipeline components.
+
+Run with:
+    pytest test_main.py -v
+    pytest test_main.py -v -k "TestSettingsStore"   # single group
+"""
+
+import asyncio
+import json
+from dataclasses import asdict
+
+import pytest
+import pytest_asyncio
+
+from main import (
+    AGENT_CONFIGS,
+    HAIKU_MODEL,
+    MAX_BUILD_CYCLES,
+    MAX_DESIGN_CYCLES,
+    MAX_IMPL_CYCLES,
+    MAX_PR_CYCLES,
+    OPUS_MODEL,
+    PM_MAIN_MODEL,
+    SONNET_MODEL,
+    _ALL_REVIEWERS,
+    AppSettings,
+    ApprovalGate,
+    OLamoDb,
+    RunRecord,
+    RunManager,
+    RunStatus,
+    SettingsStore,
+    SseBroadcaster,
+    _extract_comment_ids,
+    _make_env,
+    _parse_stage_announcement,
+    _reviewer_prompt,
+    build_agents,
+    build_pm_prompt,
+)
+
+
+# ── Stage announcement parser ─────────────────────────────────────────────────
+
+class TestParseStageAnnouncement:
+    def test_parses_stage_1(self):
+        assert _parse_stage_announcement("Moving to Stage 1 now") == "Stage 1"
+
+    def test_parses_stage_2(self):
+        assert _parse_stage_announcement("Advancing to Stage 2 — implementation") == "Stage 2"
+
+    def test_parses_stage_3(self):
+        assert _parse_stage_announcement("Beginning Stage 3") == "Stage 3"
+
+    def test_parses_stage_4(self):
+        assert _parse_stage_announcement("Entering Stage 4 — PR poll") == "Stage 4"
+
+    def test_parses_design_cycle(self):
+        assert _parse_stage_announcement("Design cycle 1/2 complete") == "Design cycle 1/2"
+
+    def test_parses_design_cycle_second(self):
+        assert _parse_stage_announcement("Design cycle 2/2") == "Design cycle 2/2"
+
+    def test_parses_implementation_cycle(self):
+        assert _parse_stage_announcement("Implementation cycle 2/3") == "Implementation cycle 2/3"
+
+    def test_parses_pr_cycle(self):
+        assert _parse_stage_announcement("PR cycle 1/2") == "PR cycle 1/2"
+
+    def test_parses_ci_check_cycle(self):
+        assert _parse_stage_announcement("CI check cycle 1/2") == "CI check cycle 1/2"
+
+    def test_parses_ci_check_cycle_second(self):
+        assert _parse_stage_announcement("CI check cycle 2/2") == "CI check cycle 2/2"
+
+    def test_case_insensitive_stage(self):
+        result = _parse_stage_announcement("STAGE 2 begins")
+        assert result is not None
+        assert "2" in result
+
+    def test_returns_none_for_unrelated_text(self):
+        assert _parse_stage_announcement("Nothing special here") is None
+
+    def test_returns_none_for_empty_string(self):
+        assert _parse_stage_announcement("") is None
+
+    def test_returns_none_for_partial_match(self):
+        # "Stage" without a number should not match
+        assert _parse_stage_announcement("The staging environment is ready") is None
+
+
+# ── AppSettings ───────────────────────────────────────────────────────────────
+
+class TestAppSettings:
+    def test_defaults_match_module_constants(self):
+        s = AppSettings()
+        assert s.pm_model == PM_MAIN_MODEL
+        assert s.opus_model == OPUS_MODEL
+        assert s.sonnet_model == SONNET_MODEL
+        assert s.haiku_model == HAIKU_MODEL
+        assert s.max_design_cycles == MAX_DESIGN_CYCLES
+        assert s.max_build_cycles == MAX_BUILD_CYCLES
+        assert s.max_impl_cycles == MAX_IMPL_CYCLES
+        assert s.max_pr_cycles == MAX_PR_CYCLES
+
+    def test_can_override_model(self):
+        s = AppSettings(pm_model="opus")
+        assert s.pm_model == "opus"
+        # other fields unaffected
+        assert s.opus_model == OPUS_MODEL
+
+    def test_can_override_cycle_limits(self):
+        s = AppSettings(max_design_cycles=5, max_pr_cycles=10)
+        assert s.max_design_cycles == 5
+        assert s.max_pr_cycles == 10
+        assert s.max_impl_cycles == MAX_IMPL_CYCLES  # unaffected
+
+    def test_two_defaults_are_equal(self):
+        assert AppSettings() == AppSettings()
+
+    def test_asdict_round_trips(self):
+        s = AppSettings(pm_model="opus", max_pr_cycles=3)
+        d = asdict(s)
+        restored = AppSettings(**d)
+        assert restored == s
+
+
+# ── RunRecord ─────────────────────────────────────────────────────────────────
+
+class TestRunRecord:
+    def test_defaults_to_queued_status(self):
+        r = RunRecord(id="abc", description="test")
+        assert r.status == RunStatus.QUEUED
+
+    def test_queued_at_iso_format(self):
+        r = RunRecord(id="abc", description="test")
+        assert r.queued_at is not None
+        assert "T" in r.queued_at  # ISO 8601 contains "T"
+
+    def test_optional_fields_start_as_none(self):
+        r = RunRecord(id="abc", description="test")
+        assert r.started_at is None
+        assert r.completed_at is None
+        assert r.error is None
+        assert r.log_dir is None
+
+    def test_run_status_values(self):
+        assert RunStatus.QUEUED == "queued"
+        assert RunStatus.RUNNING == "running"
+        assert RunStatus.COMPLETED == "completed"
+        assert RunStatus.FAILED == "failed"
+
+    def test_pr_url_defaults_to_empty_string(self):
+        r = RunRecord(id="abc", description="test")
+        assert r.pr_url == ""
+
+    def test_settings_override_defaults_to_empty_dict(self):
+        r = RunRecord(id="abc", description="test")
+        assert r.settings_override == {}
+
+    def test_pr_url_can_be_set(self):
+        r = RunRecord(id="abc", description="test", pr_url="https://github.com/org/repo/pull/42")
+        assert r.pr_url == "https://github.com/org/repo/pull/42"
+
+    def test_settings_override_can_be_set(self):
+        r = RunRecord(id="abc", description="test", settings_override={"max_impl_cycles": 5})
+        assert r.settings_override == {"max_impl_cycles": 5}
+
+
+# ── ApprovalGate ──────────────────────────────────────────────────────────────
+
+class TestApprovalGate:
+    @pytest.mark.asyncio
+    async def test_is_waiting_false_before_wait(self):
+        gate = ApprovalGate()
+        assert not gate.is_waiting
+
+    @pytest.mark.asyncio
+    async def test_wait_stores_current_plan(self):
+        gate = ApprovalGate()
+        task = asyncio.create_task(gate.wait("my plan"))
+        await asyncio.sleep(0)  # let the coroutine start
+        assert gate.current_plan == "my plan"
+        assert gate.is_waiting
+        gate.resolve(approved=True)
+        await task
+
+    @pytest.mark.asyncio
+    async def test_resolve_approved_returns_true(self):
+        gate = ApprovalGate()
+        task = asyncio.create_task(gate.wait("plan"))
+        await asyncio.sleep(0)
+        gate.resolve(approved=True)
+        result = await task
+        assert result == {"approved": True, "feedback": ""}
+
+    @pytest.mark.asyncio
+    async def test_resolve_with_feedback(self):
+        gate = ApprovalGate()
+        task = asyncio.create_task(gate.wait("plan"))
+        await asyncio.sleep(0)
+        gate.resolve(approved=False, feedback="needs more detail")
+        result = await task
+        assert result == {"approved": False, "feedback": "needs more detail"}
+
+    @pytest.mark.asyncio
+    async def test_is_waiting_false_after_resolve(self):
+        gate = ApprovalGate()
+        task = asyncio.create_task(gate.wait("plan"))
+        await asyncio.sleep(0)
+        gate.resolve(approved=True)
+        await task
+        assert not gate.is_waiting
+
+    def test_resolve_without_wait_does_not_raise(self):
+        gate = ApprovalGate()
+        gate.resolve(approved=True)  # should not raise
+
+
+# ── _reviewer_prompt ──────────────────────────────────────────────────────────
+
+class TestReviewerPrompt:
+    def test_code_reviewer_prompt(self):
+        prompt = _reviewer_prompt("code-reviewer", "the plan", "")
+        assert "Review the implementation" in prompt
+
+    def test_qa_engineer_prompt_includes_plan(self):
+        prompt = _reviewer_prompt("qa-engineer", "my plan", "")
+        assert "REVIEW CODE" in prompt
+        assert "my plan" in prompt
+
+    def test_lead_developer_prompt_includes_plan(self):
+        prompt = _reviewer_prompt("lead-developer", "my plan", "")
+        assert "REVIEW IMPLEMENTATION" in prompt
+        assert "my plan" in prompt
+
+    def test_diff_ctx_appended(self):
+        prompt = _reviewer_prompt("code-reviewer", "p", "\ndiff --git a/f b/f")
+        assert "diff --git" in prompt
+
+    def test_all_reviewers_constant_has_three_entries(self):
+        assert len(_ALL_REVIEWERS) == 3
+
+    def test_all_reviewers_contains_expected_roles(self):
+        assert "code-reviewer" in _ALL_REVIEWERS
+        assert "qa-engineer" in _ALL_REVIEWERS
+        assert "lead-developer" in _ALL_REVIEWERS
+
+
+# ── build_pm_prompt ───────────────────────────────────────────────────────────
+
+class TestBuildPmPrompt:
+    def test_contains_all_four_stage_headers(self):
+        prompt = build_pm_prompt(AppSettings())
+        for stage in ("STAGE 1", "STAGE 2", "STAGE 3", "STAGE 4"):
+            assert stage in prompt, f"Missing {stage}"
+
+    def test_embeds_design_cycle_limit(self):
+        s = AppSettings(max_design_cycles=7)
+        prompt = build_pm_prompt(s)
+        assert "7" in prompt
+
+    def test_embeds_impl_cycle_limit(self):
+        s = AppSettings(max_impl_cycles=9)
+        prompt = build_pm_prompt(s)
+        assert "9" in prompt
+
+    def test_embeds_pr_cycle_limit(self):
+        s = AppSettings(max_pr_cycles=4)
+        prompt = build_pm_prompt(s)
+        assert "4" in prompt
+
+    def test_has_explicit_build_failure_gate(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "Only proceed to 2c if build-agent reports SUCCESS" in prompt
+
+    def test_has_addressed_id_tracking(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "Exclude these IDs" in prompt
+
+    def test_has_diff_handoff_for_reviewers(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "git diff" in prompt
+
+    def test_has_mark_comments_addressed(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "MARK COMMENTS ADDRESSED" in prompt
+
+    def test_has_ci_check_polling(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "POLL CI CHECKS" in prompt
+
+    def test_has_checks_passing_gate(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "CHECKS PASSING" in prompt
+
+    def test_has_ci_check_cycle_announcement(self):
+        prompt = build_pm_prompt(AppSettings())
+        assert "CI check cycle" in prompt
+
+    def test_different_settings_produce_different_prompts(self):
+        p1 = build_pm_prompt(AppSettings(max_design_cycles=2))
+        p2 = build_pm_prompt(AppSettings(max_design_cycles=5))
+        assert p1 != p2
+
+
+# ── build_agents ──────────────────────────────────────────────────────────────
+
+class TestBuildAgents:
+    def test_returns_all_six_agents(self):
+        agents = build_agents(AppSettings())
+        expected = {
+            "lead-developer", "developer", "code-reviewer",
+            "qa-engineer", "build-agent", "repo-manager",
+        }
+        assert set(agents.keys()) == expected
+
+    def test_lead_developer_uses_opus_model(self):
+        s = AppSettings(opus_model="my-opus")
+        assert build_agents(s)["lead-developer"].model == "my-opus"
+
+    def test_code_reviewer_uses_opus_model(self):
+        s = AppSettings(opus_model="my-opus")
+        assert build_agents(s)["code-reviewer"].model == "my-opus"
+
+    def test_qa_engineer_uses_opus_model(self):
+        s = AppSettings(opus_model="my-opus")
+        assert build_agents(s)["qa-engineer"].model == "my-opus"
+
+    def test_developer_uses_sonnet_model(self):
+        s = AppSettings(sonnet_model="my-sonnet")
+        assert build_agents(s)["developer"].model == "my-sonnet"
+
+    def test_build_agent_uses_haiku_model(self):
+        s = AppSettings(haiku_model="my-haiku")
+        assert build_agents(s)["build-agent"].model == "my-haiku"
+
+    def test_repo_manager_uses_haiku_model(self):
+        s = AppSettings(haiku_model="my-haiku")
+        assert build_agents(s)["repo-manager"].model == "my-haiku"
+
+    def test_all_agents_have_descriptions(self):
+        for role, defn in build_agents(AppSettings()).items():
+            assert defn.description, f"{role} has no description"
+
+    def test_all_agents_have_tools(self):
+        for role, defn in build_agents(AppSettings()).items():
+            assert defn.tools, f"{role} has no tools"
+
+    def test_repo_manager_description_mentions_all_five_modes(self):
+        desc = build_agents(AppSettings())["repo-manager"].description
+        for mode_keyword in ("commit", "POLL PR COMMENTS", "PUSH CHANGES", "MARK COMMENTS ADDRESSED", "POLL CI CHECKS"):
+            assert mode_keyword.lower() in desc.lower(), f"Missing '{mode_keyword}' in repo-manager description"
+
+
+# ── SettingsStore ─────────────────────────────────────────────────────────────
+
+class TestSettingsStore:
+    @pytest.mark.asyncio
+    async def test_starts_unlocked_with_defaults(self):
+        store = SettingsStore()
+        assert not store.is_locked
+        assert store.settings == AppSettings()
+
+    @pytest.mark.asyncio
+    async def test_lock_sets_locked(self):
+        store = SettingsStore()
+        await store.lock()
+        assert store.is_locked
+
+    @pytest.mark.asyncio
+    async def test_unlock_clears_locked(self):
+        store = SettingsStore()
+        await store.lock()
+        await store.unlock()
+        assert not store.is_locked
+
+    @pytest.mark.asyncio
+    async def test_try_update_applies_when_not_locked(self):
+        store = SettingsStore()
+        new = AppSettings(pm_model="opus")
+        applied = await store.try_update(new)
+        assert applied is True
+        assert store.settings.pm_model == "opus"
+
+    @pytest.mark.asyncio
+    async def test_try_update_queues_and_returns_false_when_locked(self):
+        store = SettingsStore()
+        await store.lock()
+        new = AppSettings(pm_model="opus")
+        applied = await store.try_update(new)
+        assert applied is False
+        assert store.settings.pm_model != "opus"  # not applied yet
+
+    @pytest.mark.asyncio
+    async def test_unlock_applies_pending_settings(self):
+        store = SettingsStore()
+        await store.lock()
+        await store.try_update(AppSettings(pm_model="opus"))
+        await store.unlock()
+        assert store.settings.pm_model == "opus"
+        assert not store.is_locked
+
+    @pytest.mark.asyncio
+    async def test_unlock_without_pending_keeps_original(self):
+        store = SettingsStore()
+        original = store.settings.pm_model
+        await store.lock()
+        await store.unlock()
+        assert store.settings.pm_model == original
+
+    @pytest.mark.asyncio
+    async def test_second_update_while_locked_replaces_pending(self):
+        store = SettingsStore()
+        await store.lock()
+        await store.try_update(AppSettings(pm_model="first"))
+        await store.try_update(AppSettings(pm_model="second"))
+        await store.unlock()
+        assert store.settings.pm_model == "second"
+
+
+# ── SseBroadcaster ────────────────────────────────────────────────────────────
+
+class TestSseBroadcaster:
+    @pytest.mark.asyncio
+    async def test_connect_returns_uuid_and_queue(self):
+        b = SseBroadcaster()
+        cid, q = await b.connect()
+        assert len(cid) == 36  # UUID4 format "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        assert isinstance(q, asyncio.Queue)
+
+    @pytest.mark.asyncio
+    async def test_broadcast_delivers_json_to_client(self):
+        b = SseBroadcaster()
+        _, q = await b.connect()
+        await b.broadcast({"type": "ping", "value": 42})
+        data = q.get_nowait()
+        event = json.loads(data)
+        assert event["type"] == "ping"
+        assert event["value"] == 42
+
+    @pytest.mark.asyncio
+    async def test_broadcast_delivers_to_all_connected_clients(self):
+        b = SseBroadcaster()
+        _, q1 = await b.connect()
+        _, q2 = await b.connect()
+        _, q3 = await b.connect()
+        await b.broadcast({"type": "multi"})
+        assert not q1.empty()
+        assert not q2.empty()
+        assert not q3.empty()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_sends_none_sentinel(self):
+        b = SseBroadcaster()
+        cid, q = await b.connect()
+        await b.disconnect(cid)
+        sentinel = await q.get()
+        assert sentinel is None
+
+    @pytest.mark.asyncio
+    async def test_disconnected_client_receives_no_further_broadcasts(self):
+        b = SseBroadcaster()
+        cid, q = await b.connect()
+        await b.disconnect(cid)
+        await q.get()  # consume sentinel
+        await b.broadcast({"type": "after-disconnect"})
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_broadcast_with_no_clients_does_not_raise(self):
+        b = SseBroadcaster()
+        await b.broadcast({"type": "no-clients"})  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_broadcast_serialises_nested_dict(self):
+        b = SseBroadcaster()
+        _, q = await b.connect()
+        payload = {"type": "nested", "data": {"a": [1, 2, 3]}}
+        await b.broadcast(payload)
+        received = json.loads(q.get_nowait())
+        assert received["data"]["a"] == [1, 2, 3]
+
+
+# ── RunManager ────────────────────────────────────────────────────────────────
+
+@pytest_asyncio.fixture()
+async def run_manager(tmp_path, monkeypatch):
+    """Fresh RunManager backed by an in-process SQLite DB in a temp directory."""
+    monkeypatch.chdir(tmp_path)
+    mgr = RunManager(SseBroadcaster(), SettingsStore(), db_path=str(tmp_path / "test.db"))
+    await mgr.setup()
+    yield mgr
+    await mgr.close()
+
+
+class TestRunManager:
+    @pytest.mark.asyncio
+    async def test_enqueue_returns_run_with_queued_status(self, run_manager):
+        run = await run_manager.enqueue("add hello world")
+        assert run.description == "add hello world"
+        assert run.status == RunStatus.QUEUED
+
+    @pytest.mark.asyncio
+    async def test_enqueued_run_appears_in_all_runs(self, run_manager):
+        run = await run_manager.enqueue("my task")
+        ids = [r.id for r in run_manager.all_runs]
+        assert run.id in ids
+
+    @pytest.mark.asyncio
+    async def test_get_run_retrieves_by_id(self, run_manager):
+        run = await run_manager.enqueue("findable")
+        found = run_manager.get_run(run.id)
+        assert found is not None
+        assert found.id == run.id
+        assert found.description == "findable"
+
+    @pytest.mark.asyncio
+    async def test_get_run_returns_none_for_unknown_id(self, run_manager):
+        assert run_manager.get_run("does-not-exist") is None
+
+    @pytest.mark.asyncio
+    async def test_all_runs_sorted_newest_first(self, run_manager):
+        r1 = await run_manager.enqueue("first")
+        r2 = await run_manager.enqueue("second")
+        runs = run_manager.all_runs
+        assert runs[0].id == r2.id
+        assert runs[1].id == r1.id
+
+    @pytest.mark.asyncio
+    async def test_persists_runs_to_db(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        db_path = str(tmp_path / "shared.db")
+        mgr1 = RunManager(SseBroadcaster(), SettingsStore(), db_path=db_path)
+        await mgr1.setup()
+        run = await mgr1.enqueue("persist me")
+        await mgr1.close()
+
+        mgr2 = RunManager(SseBroadcaster(), SettingsStore(), db_path=db_path)
+        await mgr2.setup()
+        found = mgr2.get_run(run.id)
+        await mgr2.close()
+        assert found is not None
+        assert found.description == "persist me"
+        assert found.status == RunStatus.QUEUED
+
+    @pytest.mark.asyncio
+    async def test_multiple_enqueues_all_persisted(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        db_path = str(tmp_path / "shared.db")
+        mgr = RunManager(SseBroadcaster(), SettingsStore(), db_path=db_path)
+        await mgr.setup()
+        ids = {(await mgr.enqueue(f"task {i}")).id for i in range(3)}
+        await mgr.close()
+
+        mgr2 = RunManager(SseBroadcaster(), SettingsStore(), db_path=db_path)
+        await mgr2.setup()
+        assert {r.id for r in mgr2.all_runs} == ids
+        await mgr2.close()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_with_pr_url(self, run_manager):
+        run = await run_manager.enqueue("fix PR", pr_url="https://github.com/org/repo/pull/7")
+        assert run.pr_url == "https://github.com/org/repo/pull/7"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_with_settings_override(self, run_manager):
+        run = await run_manager.enqueue("task", settings_override={"max_impl_cycles": 1})
+        assert run.settings_override == {"max_impl_cycles": 1}
+
+    @pytest.mark.asyncio
+    async def test_enqueue_default_pr_url_is_empty(self, run_manager):
+        run = await run_manager.enqueue("task")
+        assert run.pr_url == ""
+
+    @pytest.mark.asyncio
+    async def test_enqueue_default_settings_override_is_empty(self, run_manager):
+        run = await run_manager.enqueue("task")
+        assert run.settings_override == {}
+
+    @pytest.mark.asyncio
+    async def test_pending_approvals_starts_empty(self, run_manager):
+        assert run_manager.pending_approvals == {}
+
+
+# ── OLamoDb ───────────────────────────────────────────────────────────────────
+
+class TestOLamoDb:
+    @pytest.mark.asyncio
+    async def test_open_creates_schema(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        async with db._conn.execute("SELECT name FROM sqlite_master WHERE type='table'") as cur:
+            tables = {row[0] async for row in cur}
+        await db.close()
+        assert {"runs", "events", "run_state"} <= tables
+
+    @pytest.mark.asyncio
+    async def test_upsert_and_get_run(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test run")
+        await db.upsert_run(run)
+        rows = await db.get_all_runs()
+        await db.close()
+        assert len(rows) == 1
+        assert rows[0].id == "r1"
+        assert rows[0].description == "test run"
+        assert rows[0].status == RunStatus.QUEUED
+
+    @pytest.mark.asyncio
+    async def test_upsert_run_updates_status(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+        run.status = RunStatus.RUNNING
+        run.started_at = "2026-01-01T00:00:00+00:00"
+        await db.upsert_run(run)
+        rows = await db.get_all_runs()
+        await db.close()
+        assert rows[0].status == RunStatus.RUNNING
+
+    @pytest.mark.asyncio
+    async def test_insert_and_get_events(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+        await db.insert_event("r1", {"type": "stage_changed", "stage": "Stage 1"})
+        await db.insert_event("r1", {"type": "agent_started", "role": "developer"})
+        events = await db.get_events("r1")
+        await db.close()
+        assert len(events) == 2
+        assert events[0]["type"] == "stage_changed"
+        assert events[1]["role"] == "developer"
+
+    @pytest.mark.asyncio
+    async def test_events_ordered_by_seq(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+        for i in range(5):
+            await db.insert_event("r1", {"i": i})
+        events = await db.get_events("r1")
+        await db.close()
+        assert [e["i"] for e in events] == [0, 1, 2, 3, 4]
+
+    @pytest.mark.asyncio
+    async def test_upsert_run_state(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+        await db.upsert_run_state("r1", "Stage 2")
+        await db.upsert_run_state("r1", "Stage 3")  # update
+        async with db._conn.execute("SELECT current_stage FROM run_state WHERE run_id='r1'") as cur:
+            row = await cur.fetchone()
+        await db.close()
+        assert row[0] == "Stage 3"
+
+    @pytest.mark.asyncio
+    async def test_settings_override_round_trips(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test", settings_override={"max_impl_cycles": 7})
+        await db.upsert_run(run)
+        rows = await db.get_all_runs()
+        await db.close()
+        assert rows[0].settings_override == {"max_impl_cycles": 7}
+
+    @pytest.mark.asyncio
+    async def test_pr_url_persisted(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test", pr_url="https://github.com/x/y/pull/1")
+        await db.upsert_run(run)
+        rows = await db.get_all_runs()
+        await db.close()
+        assert rows[0].pr_url == "https://github.com/x/y/pull/1"
+
+
+# ── AGENT_CONFIGS ─────────────────────────────────────────────────────────────
+
+class TestAgentConfigs:
+    def test_all_six_roles_present(self):
+        expected = {"lead-developer", "developer", "code-reviewer", "qa-engineer", "build-agent", "repo-manager"}
+        assert set(AGENT_CONFIGS.keys()) == expected
+
+    def test_each_entry_has_three_elements(self):
+        for role, cfg in AGENT_CONFIGS.items():
+            assert len(cfg) == 3, f"{role} config should be (prompt, tools, model_key)"
+
+    def test_model_keys_exist_on_app_settings(self):
+        fields = AppSettings.__dataclass_fields__
+        for role, (_, _, model_key) in AGENT_CONFIGS.items():
+            assert model_key in fields, f"{role} references unknown model key '{model_key}'"
+
+    def test_all_agents_have_tools(self):
+        for role, (_, tools, _) in AGENT_CONFIGS.items():
+            assert tools, f"{role} has empty tools list"
+
+    def test_all_agents_have_prompts(self):
+        for role, (prompt, _, _) in AGENT_CONFIGS.items():
+            assert prompt.strip(), f"{role} has empty system prompt"
+
+    def test_developer_has_write_tool(self):
+        _, tools, _ = AGENT_CONFIGS["developer"]
+        assert "Write" in tools
+
+    def test_code_reviewer_has_no_bash(self):
+        # Reviewer should read only, not execute
+        _, tools, _ = AGENT_CONFIGS["code-reviewer"]
+        assert "Bash" not in tools
+
+    def test_repo_manager_uses_haiku(self):
+        _, _, model_key = AGENT_CONFIGS["repo-manager"]
+        assert model_key == "haiku_model"
+
+    def test_lead_developer_uses_opus(self):
+        _, _, model_key = AGENT_CONFIGS["lead-developer"]
+        assert model_key == "opus_model"
+
+
+# ── _extract_comment_ids ──────────────────────────────────────────────────────
+
+class TestExtractCommentIds:
+    def test_extracts_single_id(self):
+        text = "ID: 42\nauthor: alice\nbody: fix this"
+        assert _extract_comment_ids(text) == ["42"]
+
+    def test_extracts_multiple_ids(self):
+        text = "ID: 101\n...\nID: 202\n...\nID: 303"
+        assert _extract_comment_ids(text) == ["101", "202", "303"]
+
+    def test_case_insensitive(self):
+        assert _extract_comment_ids("id: abc123") == ["abc123"]
+
+    def test_returns_empty_for_no_ids(self):
+        assert _extract_comment_ids("NO ACTIONABLE COMMENTS") == []
+
+    def test_returns_empty_for_empty_string(self):
+        assert _extract_comment_ids("") == []
+
+    def test_handles_alphanumeric_ids(self):
+        assert _extract_comment_ids("ID: PR-456") == ["PR-456"]
+
+
+# ── _make_env ─────────────────────────────────────────────────────────────────
+
+class TestMakeEnv:
+    def test_always_unsets_claudecode(self):
+        env = _make_env(AppSettings())
+        assert env.get("CLAUDECODE") == ""
+
+    def test_no_base_url_when_empty(self):
+        env = _make_env(AppSettings(api_base_url=""))
+        assert "ANTHROPIC_BASE_URL" not in env
+
+    def test_sets_base_url_when_provided(self):
+        env = _make_env(AppSettings(api_base_url="https://proxy.example.com"))
+        assert env["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
+
+
+# ── AppSettings orchestration_mode ────────────────────────────────────────────
+
+class TestOrchestrationMode:
+    def test_default_is_pm(self):
+        assert AppSettings().orchestration_mode == "pm"
+
+    def test_can_set_orchestrated(self):
+        s = AppSettings(orchestration_mode="orchestrated")
+        assert s.orchestration_mode == "orchestrated"
+
+    def test_settings_endpoint_includes_mode(self):
+        d = asdict(AppSettings())
+        assert "orchestration_mode" in d
+
+
+# ── FastAPI endpoints ─────────────────────────────────────────────────────────
+
+fastapi = pytest.importorskip("fastapi", reason="fastapi not installed")
+httpx = pytest.importorskip("httpx", reason="httpx not installed")
+
+from starlette.testclient import TestClient  # noqa: E402  (after importorskip guard)
+from main import create_app  # noqa: E402
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "static").mkdir()
+    (tmp_path / "static" / "index.html").write_text("<html>OLamo</html>")
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
+
+
+class TestApiSettings:
+    def test_get_settings_returns_defaults(self, client):
+        resp = client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "config" in data
+        assert "is_locked" in data
+        assert data["is_locked"] is False
+        assert data["config"]["pm_model"] == PM_MAIN_MODEL
+
+    def test_put_settings_updates_config(self, client):
+        resp = client.put("/api/settings", json={"pm_model": "opus", "max_pr_cycles": 5})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["applied"] is True
+        assert data["config"]["pm_model"] == "opus"
+        assert data["config"]["max_pr_cycles"] == 5
+
+    def test_put_settings_ignores_unknown_keys(self, client):
+        resp = client.put("/api/settings", json={"unknown_field": "value", "pm_model": "haiku"})
+        assert resp.status_code == 200
+        assert resp.json()["config"]["pm_model"] == "haiku"
+
+
+class TestApiRuns:
+    def test_list_runs_initially_empty(self, client):
+        resp = client.get("/api/runs")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_create_run_returns_201(self, client):
+        resp = client.post("/api/runs", json={"description": "build a feature"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["description"] == "build a feature"
+        assert data["status"] == "queued"
+        assert "id" in data
+
+    def test_create_run_appears_in_list(self, client):
+        client.post("/api/runs", json={"description": "listed task"})
+        runs = client.get("/api/runs").json()
+        assert len(runs) == 1
+        assert runs[0]["description"] == "listed task"
+
+    def test_create_run_missing_description_returns_400(self, client):
+        resp = client.post("/api/runs", json={})
+        assert resp.status_code == 400
+
+    def test_get_run_by_id(self, client):
+        created = client.post("/api/runs", json={"description": "get by id"}).json()
+        resp = client.get(f"/api/runs/{created['id']}")
+        assert resp.status_code == 200
+        assert resp.json()["id"] == created["id"]
+
+    def test_get_run_unknown_id_returns_404(self, client):
+        resp = client.get("/api/runs/nonexistent-id")
+        assert resp.status_code == 404
+
+    def test_run_events_empty_for_new_run(self, client):
+        created = client.post("/api/runs", json={"description": "no events yet"}).json()
+        resp = client.get(f"/api/runs/{created['id']}/events")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_run_events_unknown_run_returns_404(self, client):
+        resp = client.get("/api/runs/bad-id/events")
+        assert resp.status_code == 404
+
+    def test_create_run_with_pr_url(self, client):
+        resp = client.post("/api/runs", json={"description": "fix PR", "pr_url": "https://github.com/org/repo/pull/5"})
+        assert resp.status_code == 201
+        assert resp.json()["pr_url"] == "https://github.com/org/repo/pull/5"
+
+    def test_create_run_with_settings_override(self, client):
+        resp = client.post("/api/runs", json={"description": "fast run", "settings_override": {"max_impl_cycles": 1}})
+        assert resp.status_code == 201
+        assert resp.json()["settings_override"] == {"max_impl_cycles": 1}
+
+    def test_create_run_without_pr_url_defaults_to_empty(self, client):
+        resp = client.post("/api/runs", json={"description": "normal run"})
+        assert resp.status_code == 201
+        assert resp.json()["pr_url"] == ""
+
+
+class TestApiApproval:
+    def test_get_approval_returns_404_for_unknown_run(self, client):
+        resp = client.get("/api/runs/no-such-id/approval")
+        assert resp.status_code == 404
+
+    def test_get_approval_not_waiting_for_queued_run(self, client):
+        created = client.post("/api/runs", json={"description": "task"}).json()
+        resp = client.get(f"/api/runs/{created['id']}/approval")
+        assert resp.status_code == 200
+        assert resp.json()["waiting"] is False
+        assert resp.json()["plan"] == ""
+
+    def test_post_approval_returns_409_when_not_waiting(self, client):
+        created = client.post("/api/runs", json={"description": "task"}).json()
+        resp = client.post(f"/api/runs/{created['id']}/approval", json={"approved": True})
+        assert resp.status_code == 409
+
+    def test_post_approval_returns_404_for_unknown_run(self, client):
+        resp = client.post("/api/runs/no-such-id/approval", json={"approved": True})
+        assert resp.status_code == 404
+
+
+class TestApiTeam:
+    def test_team_returns_all_six_agents(self, client):
+        resp = client.get("/api/team")
+        assert resp.status_code == 200
+        data = resp.json()
+        roles = {a["role"] for a in data["agents"]}
+        expected = {"lead-developer", "developer", "code-reviewer", "qa-engineer", "build-agent", "repo-manager"}
+        assert roles == expected
+
+    def test_team_returns_pipeline_stages(self, client):
+        data = client.get("/api/team").json()
+        assert len(data["pipeline"]) == 4
+
+    def test_team_returns_cycle_limits(self, client):
+        data = client.get("/api/team").json()
+        limits = data["cycle_limits"]
+        assert limits["max_design_cycles"] == MAX_DESIGN_CYCLES
+        assert limits["max_build_cycles"] == MAX_BUILD_CYCLES
+        assert limits["max_impl_cycles"] == MAX_IMPL_CYCLES
+        assert limits["max_pr_cycles"] == MAX_PR_CYCLES
+
+    def test_each_agent_has_model_and_description(self, client):
+        agents = client.get("/api/team").json()["agents"]
+        for agent in agents:
+            assert agent["model"], f"{agent['role']} missing model"
+            assert agent["description"], f"{agent['role']} missing description"
+
+
+class TestSpaFallback:
+    def test_root_serves_index_html(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+    def test_unknown_path_serves_index_html(self, client):
+        resp = client.get("/some/spa/route")
+        assert resp.status_code == 200

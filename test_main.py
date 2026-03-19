@@ -37,8 +37,10 @@ from main import (
     _make_env,
     _parse_stage_announcement,
     _reviewer_prompt,
+    _settings_from_dict,
     build_agents,
     build_pm_prompt,
+    get_default_engine_config,
 )
 
 
@@ -1014,3 +1016,87 @@ class TestSpaFallback:
     def test_unknown_path_serves_index_html(self, client):
         resp = client.get("/some/spa/route")
         assert resp.status_code == 200
+
+
+# ── get_default_engine_config ──────────────────────────────────────────────
+
+class TestGetDefaultEngineConfig:
+    def test_lead_developer_defaults_to_claude(self):
+        assert get_default_engine_config("lead-developer", AppSettings()).engine == "claude"
+
+    def test_developer_defaults_to_claude(self):
+        assert get_default_engine_config("developer", AppSettings()).engine == "claude"
+
+    def test_code_reviewer_defaults_to_copilot(self):
+        assert get_default_engine_config("code-reviewer", AppSettings()).engine == "copilot"
+
+    def test_qa_engineer_defaults_to_copilot(self):
+        assert get_default_engine_config("qa-engineer", AppSettings()).engine == "copilot"
+
+    def test_build_agent_defaults_to_copilot(self):
+        assert get_default_engine_config("build-agent", AppSettings()).engine == "copilot"
+
+    def test_repo_manager_defaults_to_copilot(self):
+        assert get_default_engine_config("repo-manager", AppSettings()).engine == "copilot"
+
+    def test_lead_developer_claude_model_resolves_from_settings(self):
+        cfg = get_default_engine_config("lead-developer", AppSettings(opus_model="my-opus"))
+        assert cfg.model_config.model == "my-opus"
+
+    def test_developer_claude_model_resolves_from_settings(self):
+        cfg = get_default_engine_config("developer", AppSettings(sonnet_model="my-sonnet"))
+        assert cfg.model_config.model == "my-sonnet"
+
+    def test_code_reviewer_copilot_model_is_codex(self):
+        assert get_default_engine_config("code-reviewer", AppSettings()).model_config.model == "codex"
+
+    def test_qa_engineer_copilot_model(self):
+        assert get_default_engine_config("qa-engineer", AppSettings()).model_config.model == "gpt-5.4"
+
+    def test_build_agent_copilot_model(self):
+        assert get_default_engine_config("build-agent", AppSettings()).model_config.model == "gpt-5-mini"
+
+    def test_repo_manager_copilot_model(self):
+        assert get_default_engine_config("repo-manager", AppSettings()).model_config.model == "gpt-5-mini"
+
+    def test_all_six_roles_covered(self):
+        roles = ["lead-developer", "developer", "code-reviewer", "qa-engineer", "build-agent", "repo-manager"]
+        for role in roles:
+            cfg = get_default_engine_config(role, AppSettings())
+            assert cfg.engine in ("claude", "copilot")
+            assert cfg.model_config.model != ""
+
+
+# ── _settings_from_dict ────────────────────────────────────────────────────
+
+class TestSettingsFromDict:
+    def test_plain_settings_round_trips(self):
+        s = AppSettings(pm_model="opus")
+        restored = _settings_from_dict(asdict(s))
+        assert restored.pm_model == "opus"
+        assert isinstance(restored, AppSettings)
+
+    def test_agent_configs_deserialized_as_dataclasses(self):
+        d = asdict(AppSettings(agent_configs={
+            "developer": AgentEngineConfig(
+                engine="copilot",
+                model_config=ModelConfig(mode="simple", model="gpt-5")
+            )
+        }))
+        s = _settings_from_dict(d)
+        assert isinstance(s.agent_configs["developer"], AgentEngineConfig)
+        assert isinstance(s.agent_configs["developer"].model_config, ModelConfig)
+        assert s.agent_configs["developer"].engine == "copilot"
+        assert s.agent_configs["developer"].model_config.model == "gpt-5"
+
+    def test_missing_agent_configs_defaults_to_empty(self):
+        d = asdict(AppSettings())
+        d.pop("agent_configs")
+        s = _settings_from_dict(d)
+        assert s.agent_configs == {}
+
+    def test_does_not_mutate_input(self):
+        d = asdict(AppSettings())
+        original_keys = set(d.keys())
+        _settings_from_dict(d)
+        assert set(d.keys()) == original_keys

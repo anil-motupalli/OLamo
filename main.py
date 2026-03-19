@@ -112,6 +112,70 @@ class AppSettings:
 
 
 # ---------------------------------------------------------------------------
+# Smart defaults and settings helpers
+# ---------------------------------------------------------------------------
+
+_COPILOT_DEFAULTS: dict[str, str] = {
+    "lead-developer": "claude-opus-4-6",
+    "developer":      "claude-sonnet-4-6",
+    "code-reviewer":  "codex",
+    "qa-engineer":    "gpt-5.4",
+    "build-agent":    "gpt-5-mini",
+    "repo-manager":   "gpt-5-mini",
+}
+
+_DEFAULT_ENGINES: dict[str, str] = {
+    "lead-developer": "claude",
+    "developer":      "claude",
+    "code-reviewer":  "copilot",
+    "qa-engineer":    "copilot",
+    "build-agent":    "copilot",
+    "repo-manager":   "copilot",
+}
+
+_CLAUDE_TIER: dict[str, str] = {
+    "lead-developer": "opus_model",
+    "developer":      "sonnet_model",
+    "code-reviewer":  "opus_model",
+    "qa-engineer":    "opus_model",
+    "build-agent":    "haiku_model",
+    "repo-manager":   "haiku_model",
+}
+
+
+def get_default_engine_config(role: str, settings: AppSettings) -> AgentEngineConfig:
+    """Return the smart-default AgentEngineConfig for a given role."""
+    engine = _DEFAULT_ENGINES.get(role, "claude")
+    if engine == "copilot":
+        model = _COPILOT_DEFAULTS.get(role, "")
+    else:
+        tier_field = _CLAUDE_TIER.get(role, "sonnet_model")
+        model = getattr(settings, tier_field)
+    return AgentEngineConfig(engine=engine, model_config=ModelConfig(model=model))
+
+
+def _agent_engine_config_from_dict(d: dict) -> AgentEngineConfig:
+    mc = d.get("model_config") or {}
+    return AgentEngineConfig(
+        engine=d.get("engine", "claude"),
+        model_config=ModelConfig(**mc) if mc else ModelConfig(),
+        mcp_servers=d.get("mcp_servers") or {},
+    )
+
+
+def _settings_from_dict(d: dict) -> AppSettings:
+    """Reconstruct AppSettings from a plain dict (e.g. from JSON API body)."""
+    d = dict(d)  # shallow copy — do not mutate caller's dict
+    agent_configs_raw = d.pop("agent_configs", None) or {}
+    filtered = {k: v for k, v in d.items() if k in AppSettings.__dataclass_fields__}
+    agent_configs = {
+        role: _agent_engine_config_from_dict(cfg) if isinstance(cfg, dict) else cfg
+        for role, cfg in agent_configs_raw.items()
+    }
+    return AppSettings(**filtered, agent_configs=agent_configs)
+
+
+# ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
 

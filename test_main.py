@@ -8,6 +8,7 @@ Run with:
 import asyncio
 import json
 from dataclasses import asdict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -26,6 +27,7 @@ from main import (
     AgentEngineConfig,
     AppSettings,
     ApprovalGate,
+    ClaudeEngine,
     ModelConfig,
     OLamoDb,
     RunRecord,
@@ -1100,3 +1102,110 @@ class TestSettingsFromDict:
         original_keys = set(d.keys())
         _settings_from_dict(d)
         assert set(d.keys()) == original_keys
+
+
+# ── ClaudeEngine ──────────────────────────────────────────────────────────
+
+class TestClaudeEngine:
+    @pytest.mark.asyncio
+    async def test_start_is_noop(self):
+        engine = ClaudeEngine(AppSettings())
+        await engine.start()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_stop_is_noop(self):
+        engine = ClaudeEngine(AppSettings())
+        await engine.stop()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_run_returns_result_message_text(self):
+        from claude_agent_sdk import ResultMessage
+        mock_result = MagicMock(spec=ResultMessage)
+        mock_result.result = "implementation done"
+
+        async def fake_query(**kwargs):
+            yield mock_result
+
+        with patch("main.query", fake_query):
+            engine = ClaudeEngine(AppSettings())
+            result = await engine.run(
+                role="developer", prompt="implement X",
+                system_prompt="You are a developer", tools=["Read", "Write"],
+                model="sonnet", model_config=ModelConfig(),
+                mcp_servers={}, on_event=AsyncMock(),
+            )
+        assert result == "implementation done"
+
+    @pytest.mark.asyncio
+    async def test_run_emits_agent_message_for_text_blocks(self):
+        from claude_agent_sdk import AssistantMessage, TextBlock, ResultMessage
+        mock_msg = MagicMock(spec=AssistantMessage)
+        mock_block = MagicMock(spec=TextBlock)
+        mock_block.text = "Working on it..."
+        mock_msg.content = [mock_block]
+        mock_result = MagicMock(spec=ResultMessage)
+        mock_result.result = "done"
+
+        events = []
+        async def on_event(evt): events.append(evt)
+
+        async def fake_query(**kwargs):
+            yield mock_msg
+            yield mock_result
+
+        with patch("main.query", fake_query):
+            engine = ClaudeEngine(AppSettings())
+            await engine.run(
+                role="developer", prompt="x", system_prompt="sys",
+                tools=[], model="sonnet", model_config=ModelConfig(),
+                mcp_servers={}, on_event=on_event,
+            )
+        agent_msgs = [e for e in events if e["type"] == "agent_message"]
+        assert len(agent_msgs) == 1
+        assert agent_msgs[0]["role"] == "developer"
+        assert "Working on it" in agent_msgs[0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_run_per_agent_base_url_overrides_global(self):
+        captured = {}
+
+        async def fake_query(**kwargs):
+            captured.update(kwargs.get("options").env or {})
+            from claude_agent_sdk import ResultMessage
+            mock = MagicMock(spec=ResultMessage)
+            mock.result = ""
+            yield mock
+
+        with patch("main.query", fake_query):
+            engine = ClaudeEngine(AppSettings(api_base_url="https://global.example.com"))
+            await engine.run(
+                role="developer", prompt="x", system_prompt="sys", tools=[],
+                model="gpt-4",
+                model_config=ModelConfig(mode="advanced", model="gpt-4",
+                                          base_url="https://per-agent.example.com",
+                                          api_key="sk-test"),
+                mcp_servers={}, on_event=AsyncMock(),
+            )
+        assert captured.get("ANTHROPIC_BASE_URL") == "https://per-agent.example.com"
+        assert captured.get("ANTHROPIC_API_KEY") == "sk-test"
+
+    @pytest.mark.asyncio
+    async def test_run_passes_mcp_servers_to_options(self):
+        captured_options = {}
+
+        async def fake_query(**kwargs):
+            captured_options.update({"mcp_servers": kwargs.get("options").mcp_servers})
+            from claude_agent_sdk import ResultMessage
+            mock = MagicMock(spec=ResultMessage)
+            mock.result = ""
+            yield mock
+
+        mcp = {"my-server": {"type": "local", "command": "node", "args": ["srv.js"]}}
+        with patch("main.query", fake_query):
+            engine = ClaudeEngine(AppSettings())
+            await engine.run(
+                role="developer", prompt="x", system_prompt="sys", tools=[],
+                model="sonnet", model_config=ModelConfig(),
+                mcp_servers=mcp, on_event=AsyncMock(),
+            )
+        assert captured_options["mcp_servers"] == mcp

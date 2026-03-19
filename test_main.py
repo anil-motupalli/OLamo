@@ -126,6 +126,34 @@ class TestAppSettings:
         restored = AppSettings(**d)
         assert restored == s
 
+    def test_agent_configs_defaults_empty(self):
+        assert AppSettings().agent_configs == {}
+
+    def test_copilot_github_token_defaults_empty(self):
+        assert AppSettings().copilot_github_token == ""
+
+    def test_post_init_raises_on_advanced_with_no_base_url(self):
+        with pytest.raises(ValueError, match="base_url"):
+            AppSettings(agent_configs={
+                "developer": AgentEngineConfig(
+                    model_config=ModelConfig(mode="advanced", model="gpt-4", base_url="")
+                )
+            })
+
+    def test_post_init_ok_with_advanced_and_base_url(self):
+        s = AppSettings(agent_configs={
+            "developer": AgentEngineConfig(
+                model_config=ModelConfig(mode="advanced", model="gpt-4",
+                                         base_url="https://api.example.com")
+            )
+        })
+        assert s.agent_configs["developer"].engine == "claude"
+
+    def test_asdict_includes_agent_configs(self):
+        s = AppSettings(agent_configs={"developer": AgentEngineConfig(engine="copilot")})
+        d = asdict(s)
+        assert d["agent_configs"]["developer"]["engine"] == "copilot"
+
 
 # ── ModelConfig ───────────────────────────────────────────────────────────────
 

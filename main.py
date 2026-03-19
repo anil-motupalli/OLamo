@@ -72,20 +72,6 @@ class RunRecord:
 
 
 @dataclass
-class AppSettings:
-    pm_model: str = PM_MAIN_MODEL
-    opus_model: str = OPUS_MODEL
-    sonnet_model: str = SONNET_MODEL
-    haiku_model: str = HAIKU_MODEL
-    max_design_cycles: int = MAX_DESIGN_CYCLES
-    max_build_cycles: int = MAX_BUILD_CYCLES
-    max_impl_cycles: int = MAX_IMPL_CYCLES
-    max_pr_cycles: int = MAX_PR_CYCLES
-    api_base_url: str = ""  # e.g. "https://proxy.example.com" — passed as ANTHROPIC_BASE_URL
-    orchestration_mode: str = "pm"  # "pm" (sub-agent) | "orchestrated" (Python-driven)
-
-
-@dataclass
 class ModelConfig:
     mode: str = "simple"           # "simple" | "advanced"
     model: str = ""                # model name; "" = use smart default
@@ -100,6 +86,29 @@ class AgentEngineConfig:
     engine: str = "claude"         # "claude" | "copilot"
     model_config: ModelConfig = field(default_factory=ModelConfig)
     mcp_servers: dict[str, dict] = field(default_factory=dict)
+
+
+@dataclass
+class AppSettings:
+    pm_model: str = PM_MAIN_MODEL
+    opus_model: str = OPUS_MODEL
+    sonnet_model: str = SONNET_MODEL
+    haiku_model: str = HAIKU_MODEL
+    max_design_cycles: int = MAX_DESIGN_CYCLES
+    max_build_cycles: int = MAX_BUILD_CYCLES
+    max_impl_cycles: int = MAX_IMPL_CYCLES
+    max_pr_cycles: int = MAX_PR_CYCLES
+    api_base_url: str = ""  # e.g. "https://proxy.example.com" — passed as ANTHROPIC_BASE_URL
+    orchestration_mode: str = "pm"  # "pm" (sub-agent) | "orchestrated" (Python-driven)
+    agent_configs: dict[str, AgentEngineConfig] = field(default_factory=dict)
+    copilot_github_token: str = ""
+
+    def __post_init__(self) -> None:
+        for role, cfg in self.agent_configs.items():
+            if cfg.model_config.mode == "advanced" and not cfg.model_config.base_url:
+                raise ValueError(
+                    f"Agent '{role}': advanced model config requires base_url"
+                )
 
 
 # ---------------------------------------------------------------------------

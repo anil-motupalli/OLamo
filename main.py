@@ -116,6 +116,7 @@ class AppSettings:
 # ---------------------------------------------------------------------------
 
 _COPILOT_DEFAULTS: dict[str, str] = {
+    # Entries for claude-default roles: used when user explicitly switches those agents to copilot engine
     "lead-developer": "claude-opus-4-6",
     "developer":      "claude-sonnet-4-6",
     "code-reviewer":  "codex",

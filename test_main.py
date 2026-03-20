@@ -44,6 +44,7 @@ from main import (
     build_agents,
     build_pm_prompt,
     get_default_engine_config,
+    run_pipeline_orchestrated,
 )
 
 
@@ -1335,3 +1336,96 @@ class TestCopilotEngine:
         assert call_cfg["provider"]["type"] == "openai"
         assert call_cfg["provider"]["base_url"] == "https://custom.api.com"
         assert call_cfg["provider"]["api_key"] == "sk-custom"
+
+
+# ── Orchestration engine routing ──────────────────────────────────────────────
+
+class TestOrchestrationEngineRouting:
+    @pytest.mark.asyncio
+    async def test_claude_engine_agents_invoke_query(self):
+        """Agents configured for claude engine go through ClaudeEngine (query())."""
+        from claude_agent_sdk import ResultMessage
+        query_calls = []
+
+        async def fake_query(**kwargs):
+            query_calls.append(kwargs)
+            mock = MagicMock(spec=ResultMessage)
+            mock.result = "APPROVED"
+            yield mock
+
+        settings = AppSettings(
+            orchestration_mode="orchestrated",
+            max_design_cycles=1,
+            max_impl_cycles=1,
+            max_build_cycles=1,
+            max_pr_cycles=1,
+            agent_configs={role: AgentEngineConfig(engine="claude")
+                           for role in ["lead-developer", "developer", "code-reviewer",
+                                        "qa-engineer", "build-agent", "repo-manager"]},
+        )
+
+        with patch("main.query", fake_query):
+            events = []
+            on_event = AsyncMock(side_effect=lambda e: events.append(e))
+            await run_pipeline_orchestrated(
+                task="add hello world",
+                settings=settings,
+                on_event=on_event,
+            )
+
+        # With max_design_cycles=1, max_impl_cycles=1, max_build_cycles=1 the pipeline
+        # runs at minimum: lead-dev plan, qa review, developer impl, build-agent, code-reviewer,
+        # qa-engineer, lead-dev review, repo-manager = 8+ calls
+        assert len(query_calls) >= 8
+
+    @pytest.mark.asyncio
+    async def test_copilot_engine_agents_invoke_copilot_client(self):
+        """Agents configured for copilot engine go through CopilotEngine."""
+        session = MagicMock()
+        handlers = []
+        session.on = lambda h: handlers.append(h)
+        session.disconnect = AsyncMock()
+
+        async def fake_send(prompt):
+            msg_evt = MagicMock()
+            msg_evt.type.value = "assistant.message"
+            msg_evt.data.content = "APPROVED"
+            for h in handlers: h(msg_evt)
+            idle_evt = MagicMock()
+            idle_evt.type.value = "session.idle"
+            for h in handlers: h(idle_evt)
+
+        session.send = fake_send
+
+        mock_client = MagicMock()
+        mock_client.start = AsyncMock()
+        mock_client.stop = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=session)
+
+        settings = AppSettings(
+            orchestration_mode="orchestrated",
+            copilot_github_token="gh-tok",
+            max_design_cycles=1,
+            max_impl_cycles=1,
+            max_build_cycles=1,
+            max_pr_cycles=1,
+            agent_configs={role: AgentEngineConfig(engine="copilot",
+                                                    model_config=ModelConfig(model="gpt-5"))
+                           for role in ["lead-developer", "developer", "code-reviewer",
+                                        "qa-engineer", "build-agent", "repo-manager"]},
+        )
+
+        with patch("main.CopilotClient", return_value=mock_client), \
+             patch("main.SubprocessConfig"):
+            events = []
+            on_event = AsyncMock(side_effect=lambda e: events.append(e))
+            await run_pipeline_orchestrated(
+                task="add hello world",
+                settings=settings,
+                on_event=on_event,
+            )
+
+        # start() called once, stop() called once, create_session() called ≥8 times
+        assert mock_client.start.call_count == 1
+        assert mock_client.stop.call_count == 1
+        assert mock_client.create_session.call_count >= 8

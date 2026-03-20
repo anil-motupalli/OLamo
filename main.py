@@ -823,196 +823,216 @@ async def run_pipeline_orchestrated(
 ) -> str:
     """Orchestration driven entirely by Python — no PM LLM, deterministic loops."""
 
-    env = _make_env(settings)
+    # Build engine instances
+    uses_copilot = any(
+        (settings.agent_configs.get(r) or get_default_engine_config(r, settings)).engine == "copilot"
+        for r in AGENT_CONFIGS
+    )
+    claude_engine: AgentEngine = ClaudeEngine(settings)
+    copilot_engine: AgentEngine | None = CopilotEngine(settings) if uses_copilot else None
+
+    await claude_engine.start()
+    if copilot_engine:
+        await copilot_engine.start()
+
+    def _resolve(role: str) -> tuple[AgentEngine, str, ModelConfig, dict]:
+        cfg = settings.agent_configs.get(role) or get_default_engine_config(role, settings)
+        eng = copilot_engine if cfg.engine == "copilot" and copilot_engine else claude_engine
+        model = cfg.model_config.model or (
+            _COPILOT_DEFAULTS.get(role, "") if cfg.engine == "copilot"
+            else getattr(settings, _CLAUDE_TIER.get(role, "sonnet_model"))
+        )
+        return eng, model, cfg.model_config, cfg.mcp_servers
 
     async def call(role: str, prompt: str) -> str:
-        """Call a single agent and return its result text."""
         await on_event({"type": "agent_started", "role": role})
-        system_prompt, tools, model_key = AGENT_CONFIGS[role]
-        model = getattr(settings, model_key)
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            tools=tools,
-            model=model,
-            permission_mode="acceptEdits",
-            env=env,
-        )
-        result = ""
-        async for msg in query(prompt=prompt, options=options):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock):
-                        await on_event({"type": "agent_message", "role": role, "text": block.text[:300]})
-            elif isinstance(msg, ResultMessage):
-                result = msg.result
-        return result
+        system_prompt, tools, _ = AGENT_CONFIGS[role]
+        eng, model, model_config, mcp_servers = _resolve(role)
+        try:
+            return await eng.run(
+                role=role,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                tools=tools,
+                model=model,
+                model_config=model_config,
+                mcp_servers=mcp_servers,
+                on_event=on_event,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Agent '{role}' failed: {e}") from e
 
     async def stage(label: str) -> None:
         await on_event({"type": "stage_changed", "stage": label})
 
-    plan = task        # used in reviewer prompts; overwritten in Stage 1 unless skipping
-    last_diff = ""
-    pr_result = pr_url  # overwritten in Stage 3 unless pr_url was provided
+    try:
+        plan = task        # used in reviewer prompts; overwritten in Stage 1 unless skipping
+        last_diff = ""
+        pr_result = pr_url  # overwritten in Stage 3 unless pr_url was provided
 
-    if not pr_url:
-        # ── Stage 1: Design Loop ──────────────────────────────────────────────────
-        await stage("Stage 1")
-        plan = await call("lead-developer", task)
+        if not pr_url:
+            # ── Stage 1: Design Loop ──────────────────────────────────────────────────
+            await stage("Stage 1")
+            plan = await call("lead-developer", task)
 
-        for i in range(settings.max_design_cycles):
-            await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}")
-            qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
-            if "APPROVED" in qa_result.upper():
-                break
-            if i < settings.max_design_cycles - 1:
-                plan = await call(
-                    "lead-developer",
-                    f"REFINE the following plan based on QA findings.\n\nPlan:\n{plan}\n\nFindings:\n{qa_result}",
-                )
-
-        # Optional human approval gate after design loop
-        if on_approval_required is not None:
-            while True:
-                gate_result = await on_approval_required(plan)
-                if gate_result.get("approved"):
+            for i in range(settings.max_design_cycles):
+                await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}")
+                qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
+                if "APPROVED" in qa_result.upper():
                     break
-                feedback = gate_result.get("feedback", "")
-                if feedback:
+                if i < settings.max_design_cycles - 1:
                     plan = await call(
                         "lead-developer",
-                        f"REFINE the following plan based on human feedback.\n\nPlan:\n{plan}\n\nFeedback:\n{feedback}",
+                        f"REFINE the following plan based on QA findings.\n\nPlan:\n{plan}\n\nFindings:\n{qa_result}",
                     )
 
-        # ── Stage 2: Implementation Loop ─────────────────────────────────────────
-        await stage("Stage 2")
-        findings = ""
-        already_approved: set[str] = set()
+            # Optional human approval gate after design loop
+            if on_approval_required is not None:
+                while True:
+                    gate_result = await on_approval_required(plan)
+                    if gate_result.get("approved"):
+                        break
+                    feedback = gate_result.get("feedback", "")
+                    if feedback:
+                        plan = await call(
+                            "lead-developer",
+                            f"REFINE the following plan based on human feedback.\n\nPlan:\n{plan}\n\nFeedback:\n{feedback}",
+                        )
 
-        for impl_cycle in range(settings.max_impl_cycles):
-            await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}")
+            # ── Stage 2: Implementation Loop ─────────────────────────────────────────
+            await stage("Stage 2")
+            findings = ""
+            already_approved: set[str] = set()
 
-            impl_prompt = plan if not findings else f"{plan}\n\nReview findings to address:\n{findings}"
-            await call("developer", impl_prompt)
+            for impl_cycle in range(settings.max_impl_cycles):
+                await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}")
 
-            # Build loop
-            build_ok = False
-            build_output = ""
-            for build_cycle in range(settings.max_build_cycles):
-                build_output = await call("build-agent", "Build and test the project.")
-                if "SUCCESS" in build_output.upper():
-                    build_ok = True
+                impl_prompt = plan if not findings else f"{plan}\n\nReview findings to address:\n{findings}"
+                await call("developer", impl_prompt)
+
+                # Build loop
+                build_ok = False
+                build_output = ""
+                for build_cycle in range(settings.max_build_cycles):
+                    build_output = await call("build-agent", "Build and test the project.")
+                    if "SUCCESS" in build_output.upper():
+                        build_ok = True
+                        break
+                    if build_cycle < settings.max_build_cycles - 1:
+                        await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+
+                if not build_ok:
+                    findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
                     break
-                if build_cycle < settings.max_build_cycles - 1:
-                    await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
 
-            if not build_ok:
-                findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
-                break
+                # Code review with smart skip — only re-invite approved reviewers on critical findings
+                diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+                pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
 
-            # Code review with smart skip — only re-invite approved reviewers on critical findings
-            diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
-            pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
+                reviewer_results: dict[str, str] = {}
+                if pending:
+                    results = await asyncio.gather(
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in pending]
+                    )
+                    for role, result in zip(pending, results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" not in result.upper():
+                            already_approved.add(role)
 
-            reviewer_results: dict[str, str] = {}
-            if pending:
-                results = await asyncio.gather(
-                    *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in pending]
+                combined = "\n".join(reviewer_results.values())
+                has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
+                if has_critical and already_approved:
+                    reinvite = list(already_approved)
+                    re_results = await asyncio.gather(
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in reinvite]
+                    )
+                    for role, result in zip(reinvite, re_results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" in result.upper():
+                            already_approved.discard(role)
+                elif already_approved:
+                    await on_event({
+                        "type": "agent_message", "role": "orchestrator",
+                        "text": f"Skipping approved reviewer(s): {', '.join(sorted(already_approved))}",
+                    })
+
+                findings = "\n\n---\n\n".join(
+                    r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper()
                 )
-                for role, result in zip(pending, results):
-                    reviewer_results[role] = result
-                    if "NEEDS IMPROVEMENT" not in result.upper():
-                        already_approved.add(role)
+                if not findings:
+                    break
 
-            combined = "\n".join(reviewer_results.values())
-            has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
-            if has_critical and already_approved:
-                reinvite = list(already_approved)
-                re_results = await asyncio.gather(
-                    *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in reinvite]
-                )
-                for role, result in zip(reinvite, re_results):
-                    reviewer_results[role] = result
-                    if "NEEDS IMPROVEMENT" in result.upper():
-                        already_approved.discard(role)
-            elif already_approved:
-                await on_event({
-                    "type": "agent_message", "role": "orchestrator",
-                    "text": f"Skipping approved reviewer(s): {', '.join(sorted(already_approved))}",
-                })
-
-            findings = "\n\n---\n\n".join(
-                r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper()
+            # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
+            await stage("Stage 3")
+            pr_result = await call(
+                "repo-manager",
+                f"Commit all changes and create a Pull Request.\n"
+                f"Branch: feature/{re.sub(r'[^a-z0-9]+', '-', task[:50].lower()).strip('-')}\n"
+                f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.",
             )
-            if not findings:
+            last_diff = pr_result
+
+        # ── Stage 3b: CI Check Polling ────────────────────────────────────────────
+        for ci_cycle in range(settings.max_pr_cycles):
+            await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}")
+            check_result = await call("repo-manager", "POLL CI CHECKS")
+            if "CHECKS PASSING" in check_result.upper():
                 break
 
-        # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
-        await stage("Stage 3")
-        pr_result = await call(
-            "repo-manager",
-            f"Commit all changes and create a Pull Request.\n"
-            f"Branch: feature/{re.sub(r'[^a-z0-9]+', '-', task[:50].lower()).strip('-')}\n"
-            f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.",
-        )
-        last_diff = pr_result
+            await call("developer", f"Fix the following CI check failures:\n{check_result}")
 
-    # ── Stage 3b: CI Check Polling ────────────────────────────────────────────
-    for ci_cycle in range(settings.max_pr_cycles):
-        await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}")
-        check_result = await call("repo-manager", "POLL CI CHECKS")
-        if "CHECKS PASSING" in check_result.upper():
-            break
-
-        await call("developer", f"Fix the following CI check failures:\n{check_result}")
-
-        build_output = await call("build-agent", "Build and test the project.")
-        if "FAILURE" in build_output.upper():
-            await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
-            await call("build-agent", "Build and test the project.")
-
-        last_diff = await call("repo-manager", "PUSH CHANGES")
-
-    # ── Stage 4: PR Poll Loop ─────────────────────────────────────────────────
-    await stage("Stage 4")
-    addressed_ids: list[str] = []
-
-    for pr_cycle in range(settings.max_pr_cycles):
-        await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}")
-
-        exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
-        poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
-
-        if "NO ACTIONABLE COMMENTS" in poll_result.upper():
-            break
-
-        new_ids = _extract_comment_ids(poll_result)
-        if new_ids:
-            addressed_ids.extend(new_ids)
-            await call("repo-manager", f"MARK COMMENTS ADDRESSED: {', '.join(new_ids)}")
-
-        await call("developer", f"Address the following PR review comments:\n{poll_result}")
-
-        build_output = await call("build-agent", "Build and test the project.")
-        if "FAILURE" in build_output.upper():
-            await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
-            await call("build-agent", "Build and test the project.")
-
-        # One reviewer pass after PR comment fix
-        diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
-        reviews = await asyncio.gather(
-            *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in _ALL_REVIEWERS]
-        )
-        review_findings = "\n\n---\n\n".join(r for r in reviews if "NEEDS IMPROVEMENT" in r.upper())
-        if review_findings:
-            await call("developer", f"Address review findings before pushing:\n{review_findings}")
             build_output = await call("build-agent", "Build and test the project.")
             if "FAILURE" in build_output.upper():
                 await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
                 await call("build-agent", "Build and test the project.")
 
-        last_diff = await call("repo-manager", "PUSH CHANGES")
+            last_diff = await call("repo-manager", "PUSH CHANGES")
 
-    return f"Pipeline complete. PR: {pr_result[:200]}"
+        # ── Stage 4: PR Poll Loop ─────────────────────────────────────────────────
+        await stage("Stage 4")
+        addressed_ids: list[str] = []
+
+        for pr_cycle in range(settings.max_pr_cycles):
+            await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}")
+
+            exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
+            poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
+
+            if "NO ACTIONABLE COMMENTS" in poll_result.upper():
+                break
+
+            new_ids = _extract_comment_ids(poll_result)
+            if new_ids:
+                addressed_ids.extend(new_ids)
+                await call("repo-manager", f"MARK COMMENTS ADDRESSED: {', '.join(new_ids)}")
+
+            await call("developer", f"Address the following PR review comments:\n{poll_result}")
+
+            build_output = await call("build-agent", "Build and test the project.")
+            if "FAILURE" in build_output.upper():
+                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                await call("build-agent", "Build and test the project.")
+
+            # One reviewer pass after PR comment fix
+            diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+            reviews = await asyncio.gather(
+                *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in _ALL_REVIEWERS]
+            )
+            review_findings = "\n\n---\n\n".join(r for r in reviews if "NEEDS IMPROVEMENT" in r.upper())
+            if review_findings:
+                await call("developer", f"Address review findings before pushing:\n{review_findings}")
+                build_output = await call("build-agent", "Build and test the project.")
+                if "FAILURE" in build_output.upper():
+                    await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                    await call("build-agent", "Build and test the project.")
+
+            last_diff = await call("repo-manager", "PUSH CHANGES")
+
+        return f"Pipeline complete. PR: {pr_result[:200]}"
+    finally:
+        await claude_engine.stop()
+        if copilot_engine:
+            await copilot_engine.stop()
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────────

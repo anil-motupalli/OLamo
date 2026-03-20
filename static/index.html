@@ -222,7 +222,16 @@
             <div class="flex items-center gap-3 mb-2">
               <div :class="roleColor(agent.role)" class="w-2 h-2 rounded-full flex-shrink-0"></div>
               <span class="font-semibold text-sm" x-text="agent.role"></span>
-              <span class="ml-auto text-xs px-2 py-0.5 bg-gray-800 rounded text-gray-400" x-text="agent.model"></span>
+              <div class="ml-auto flex items-center gap-1.5">
+                <span
+                  :class="agent.engine === 'copilot'
+                    ? 'bg-green-900/50 text-green-400 border-green-800'
+                    : 'bg-indigo-900/50 text-indigo-400 border-indigo-800'"
+                  class="text-xs px-1.5 py-0.5 rounded border"
+                  x-text="agent.engine || 'claude'">
+                </span>
+                <span class="text-xs px-2 py-0.5 bg-gray-800 rounded text-gray-400" x-text="agent.model"></span>
+              </div>
             </div>
             <p class="text-xs text-gray-500 leading-relaxed" x-text="agent.description"></p>
           </div>
@@ -302,6 +311,111 @@
           </template>
         </div>
 
+        <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Agents</h2>
+        <div class="space-y-3 mb-6">
+          <template x-for="agent in agentRows" :key="agent.role">
+            <div class="border border-gray-700 rounded-lg p-3">
+              <!-- Header: role + engine toggle + model + advanced toggle -->
+              <div class="flex items-center gap-3 mb-2 flex-wrap">
+                <span class="text-xs font-semibold text-gray-200 w-32 flex-shrink-0" x-text="agent.role"></span>
+                <div class="flex rounded overflow-hidden border border-gray-700">
+                  <button @click="setAgentEngine(agent.role, 'claude')"
+                    :class="getAgentEngine(agent.role) === 'claude' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+                    class="px-3 py-1 text-xs transition-colors">Claude</button>
+                  <button @click="setAgentEngine(agent.role, 'copilot')"
+                    :class="getAgentEngine(agent.role) === 'copilot' ? 'bg-green-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+                    class="px-3 py-1 text-xs border-l border-gray-700 transition-colors">Copilot</button>
+                </div>
+                <input type="text"
+                  :value="getAgentModel(agent.role)"
+                  @input="setAgentModel(agent.role, $event.target.value)"
+                  class="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-indigo-500"
+                  placeholder="model name" />
+                <button @click="toggleAgentAdvanced(agent.role)"
+                  class="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
+                  x-text="isAgentAdvanced(agent.role) ? 'Simple ▲' : 'Advanced ▼'"></button>
+              </div>
+              <!-- Advanced fields -->
+              <div x-show="isAgentAdvanced(agent.role)" class="mt-2 grid grid-cols-2 gap-2 pl-4">
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Provider</label>
+                  <select :value="getAgentField(agent.role, 'provider_type')"
+                    @change="setAgentField(agent.role, 'provider_type', $event.target.value)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none">
+                    <option value="openai">openai</option>
+                    <option value="azure">azure</option>
+                    <option value="anthropic">anthropic</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Base URL</label>
+                  <input type="text" :value="getAgentField(agent.role, 'base_url')"
+                    @input="setAgentField(agent.role, 'base_url', $event.target.value)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
+                    placeholder="https://..." />
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">API Key</label>
+                  <input type="password" :value="getAgentField(agent.role, 'api_key')"
+                    @input="setAgentField(agent.role, 'api_key', $event.target.value)"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
+                    placeholder="sk-..." />
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Extra Params (JSON)</label>
+                  <input type="text" :value="getAgentExtraParams(agent.role)"
+                    @input="setAgentExtraParams(agent.role, $event.target.value)"
+                    :class="agentExtraParamsError(agent.role) ? 'border-red-500' : 'border-gray-700'"
+                    class="w-full bg-gray-800 border rounded px-2 py-1 text-xs text-gray-100 focus:outline-none font-mono"
+                    placeholder="{}" />
+                  <p x-show="agentExtraParamsError(agent.role)" class="text-red-400 text-xs mt-0.5"
+                    x-text="agentExtraParamsError(agent.role)"></p>
+                </div>
+              </div>
+              <!-- MCP Servers -->
+              <div class="mt-2 pl-4">
+                <button @click="toggleAgentMcp(agent.role)" class="text-xs text-gray-600 hover:text-gray-400">
+                  MCP Servers
+                  <span x-show="mcpServerCount(agent.role) > 0" x-text="'(' + mcpServerCount(agent.role) + ')'"></span>
+                  <span x-text="isAgentMcpOpen(agent.role) ? '▲' : '▼'"></span>
+                </button>
+                <div x-show="isAgentMcpOpen(agent.role)" class="mt-2 space-y-1">
+                  <template x-for="(server, idx) in getAgentMcpList(agent.role)" :key="idx">
+                    <div class="flex items-center gap-2">
+                      <input type="text" :value="server.name"
+                        @input="setMcpName(agent.role, idx, $event.target.value)"
+                        class="w-28 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs focus:outline-none"
+                        placeholder="name" />
+                      <input type="text" :value="server.config"
+                        @input="setMcpConfig(agent.role, idx, $event.target.value)"
+                        class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
+                        placeholder='{"type":"local","command":"npx","args":["./s.js"],"tools":["*"]}' />
+                      <button @click="removeMcpServer(agent.role, idx)" class="text-red-500 hover:text-red-400 text-xs">×</button>
+                    </div>
+                  </template>
+                  <button @click="addMcpServer(agent.role)" class="text-xs text-indigo-400 hover:text-indigo-300 mt-1">+ Add server</button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Copilot Connection (shown when ≥1 agent uses Copilot engine) -->
+        <template x-if="anyAgentUsesCopilot()">
+          <div class="mb-6">
+            <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Copilot Connection</h2>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">
+                GitHub Token
+                <span class="text-gray-600 font-normal">(optional — falls back to COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN)</span>
+              </label>
+              <input type="password" x-model="settingsForm.copilot_github_token"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500"
+                placeholder="ghp_..." />
+            </div>
+          </div>
+        </template>
+
         <div class="flex items-center gap-3">
           <button
             @click="saveSettings()"
@@ -373,6 +487,33 @@ function app() {
       { key: 'max_impl_cycles',   label: 'Max Impl Cycles' },
       { key: 'max_pr_cycles',     label: 'Max PR Cycles' },
     ],
+
+    // Agent config UI state
+    agentRows: [
+      { role: 'lead-developer' }, { role: 'developer' }, { role: 'code-reviewer' },
+      { role: 'qa-engineer' },    { role: 'build-agent' }, { role: 'repo-manager' },
+    ],
+    _agentAdvanced: {},
+    _agentMcpOpen: {},
+    _agentMcpLists: {},
+    _agentExtraParamsRaw: {},
+    _agentExtraParamsErr: {},
+    _copilotDefaults: {
+      'lead-developer': 'claude-opus-4-6', 'developer': 'claude-sonnet-4-6',
+      'code-reviewer': 'codex', 'qa-engineer': 'gpt-5.4',
+      'build-agent': 'gpt-5-mini', 'repo-manager': 'gpt-5-mini',
+    },
+    _defaultEngines: {
+      'lead-developer': 'claude', 'developer': 'claude',
+      'code-reviewer': 'copilot', 'qa-engineer': 'copilot',
+      'build-agent': 'copilot', 'repo-manager': 'copilot',
+    },
+    // Maps each role to the AppSettings field name holding its Claude tier model
+    _claudeDefaultTier: {
+      'lead-developer': 'opus_model', 'developer': 'sonnet_model',
+      'code-reviewer': 'opus_model', 'qa-engineer': 'opus_model',
+      'build-agent': 'haiku_model', 'repo-manager': 'haiku_model',
+    },
 
     // Stages reached (from run detail events)
     _stagesReached: new Set(),
@@ -501,6 +642,10 @@ function app() {
     },
 
     async saveSettings() {
+      if (this.hasAgentExtraParamsErrors()) {
+        this.settingsError = 'Fix JSON errors in Extra Params before saving.';
+        return;
+      }
       this.savingSettings = true;
       this.settingsSaved = false;
       this.settingsError = '';
@@ -519,6 +664,97 @@ function app() {
       } finally {
         this.savingSettings = false;
       }
+    },
+
+    // ── Agent config helpers ──────────────────────────────────────
+    _getAgentCfg(role) {
+      if (!this.settingsForm.agent_configs) this.settingsForm.agent_configs = {};
+      if (!this.settingsForm.agent_configs[role]) {
+        this.settingsForm.agent_configs[role] = {
+          engine: this._defaultEngines[role] || 'claude',
+          model_config: { mode: 'simple', model: '', provider_type: 'openai',
+                          base_url: '', api_key: '', extra_params: {} },
+          mcp_servers: {},
+        };
+      }
+      return this.settingsForm.agent_configs[role];
+    },
+    getAgentEngine(role) { return this._getAgentCfg(role).engine; },
+    setAgentEngine(role, engine) {
+      const cfg = this._getAgentCfg(role);
+      cfg.engine = engine;
+      if (cfg.model_config.mode === 'simple') {
+        if (engine === 'copilot') {
+          cfg.model_config.model = this._copilotDefaults[role] || '';
+        } else {
+          // Look up the per-role Claude tier field (e.g. 'opus_model', 'sonnet_model')
+          const tierField = this._claudeDefaultTier[role] || 'sonnet_model';
+          cfg.model_config.model = this.settingsForm[tierField] || '';
+        }
+      }
+    },
+    getAgentModel(role) { return this._getAgentCfg(role).model_config.model; },
+    setAgentModel(role, val) { this._getAgentCfg(role).model_config.model = val; },
+    isAgentAdvanced(role) { return !!this._agentAdvanced[role]; },
+    toggleAgentAdvanced(role) {
+      // Use object spread to trigger Alpine.js v3 reactivity on new keys
+      const next = !this._agentAdvanced[role];
+      this._agentAdvanced = { ...this._agentAdvanced, [role]: next };
+      this._getAgentCfg(role).model_config.mode = next ? 'advanced' : 'simple';
+    },
+    getAgentField(role, field) { return this._getAgentCfg(role).model_config[field] || ''; },
+    setAgentField(role, field, val) { this._getAgentCfg(role).model_config[field] = val; },
+    getAgentExtraParams(role) {
+      if (this._agentExtraParamsRaw[role] === undefined)
+        this._agentExtraParamsRaw[role] = JSON.stringify(
+          this._getAgentCfg(role).model_config.extra_params || {});
+      return this._agentExtraParamsRaw[role];
+    },
+    setAgentExtraParams(role, val) {
+      this._agentExtraParamsRaw = { ...this._agentExtraParamsRaw, [role]: val };
+      try {
+        this._getAgentCfg(role).model_config.extra_params = JSON.parse(val);
+        this._agentExtraParamsErr = { ...this._agentExtraParamsErr, [role]: '' };
+      } catch {
+        this._agentExtraParamsErr = { ...this._agentExtraParamsErr, [role]: 'Invalid JSON' };
+      }
+    },
+    agentExtraParamsError(role) { return this._agentExtraParamsErr[role] || ''; },
+    isAgentMcpOpen(role) { return !!this._agentMcpOpen[role]; },
+    toggleAgentMcp(role) {
+      this._agentMcpOpen = { ...this._agentMcpOpen, [role]: !this._agentMcpOpen[role] };
+    },
+    mcpServerCount(role) { return Object.keys(this._getAgentCfg(role).mcp_servers || {}).length; },
+    getAgentMcpList(role) {
+      if (!this._agentMcpLists[role]) {
+        const s = this._getAgentCfg(role).mcp_servers || {};
+        this._agentMcpLists[role] = Object.entries(s).map(([name, cfg]) =>
+          ({ name, config: JSON.stringify(cfg) }));
+      }
+      return this._agentMcpLists[role];
+    },
+    addMcpServer(role) {
+      if (!this._agentMcpLists[role]) this._agentMcpLists[role] = [];
+      this._agentMcpLists[role].push({ name: '', config: '{}' });
+    },
+    removeMcpServer(role, idx) { this._agentMcpLists[role].splice(idx, 1); this._syncMcp(role); },
+    setMcpName(role, idx, val) { this._agentMcpLists[role][idx].name = val; this._syncMcp(role); },
+    setMcpConfig(role, idx, val) { this._agentMcpLists[role][idx].config = val; this._syncMcp(role); },
+    _syncMcp(role) {
+      const servers = {};
+      for (const { name, config } of (this._agentMcpLists[role] || []))
+        if (name) try { servers[name] = JSON.parse(config); } catch {}
+      this._getAgentCfg(role).mcp_servers = servers;
+    },
+    anyAgentUsesCopilot() {
+      if (!this.settingsForm.agent_configs) return false;
+      const explicit = Object.values(this.settingsForm.agent_configs).some(c => c.engine === 'copilot');
+      const byDefault = Object.keys(this._defaultEngines).some(role =>
+        !this.settingsForm.agent_configs[role] && this._defaultEngines[role] === 'copilot');
+      return explicit || byDefault;
+    },
+    hasAgentExtraParamsErrors() {
+      return Object.values(this._agentExtraParamsErr).some(e => !!e);
     },
 
     // ── Helpers ──────────────────────────────────────────────

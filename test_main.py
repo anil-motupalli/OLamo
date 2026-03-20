@@ -28,6 +28,7 @@ from main import (
     AppSettings,
     ApprovalGate,
     ClaudeEngine,
+    CopilotEngine,
     ModelConfig,
     OLamoDb,
     RunRecord,
@@ -1209,3 +1210,128 @@ class TestClaudeEngine:
                 mcp_servers=mcp, on_event=AsyncMock(),
             )
         assert captured_options["mcp_servers"] == mcp
+
+
+class TestCopilotEngine:
+    def _make_mock_session(self, result_content="copilot result"):
+        """Build a mock session that fires assistant.message then session.idle."""
+        session = MagicMock()
+        handlers = []
+        session.on = lambda h: handlers.append(h)
+        session.disconnect = AsyncMock()
+
+        async def fake_send(prompt):
+            msg_evt = MagicMock()
+            msg_evt.type.value = "assistant.message"
+            msg_evt.data.content = result_content
+            for h in handlers:
+                h(msg_evt)
+            idle_evt = MagicMock()
+            idle_evt.type.value = "session.idle"
+            for h in handlers:
+                h(idle_evt)
+
+        session.send = fake_send
+        return session
+
+    @pytest.mark.asyncio
+    async def test_start_raises_if_sdk_missing(self):
+        with patch("main.CopilotClient", None):
+            engine = CopilotEngine(AppSettings())
+            with pytest.raises(SystemExit):
+                await engine.start()
+
+    @pytest.mark.asyncio
+    async def test_run_returns_assistant_message_content(self):
+        session = self._make_mock_session("feature implemented")
+        mock_client = MagicMock()
+        mock_client.start = AsyncMock()
+        mock_client.stop = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=session)
+
+        with patch("main.CopilotClient", return_value=mock_client), \
+             patch("main.SubprocessConfig"):
+            engine = CopilotEngine(AppSettings(copilot_github_token="gh-tok"))
+            await engine.start()
+            result = await engine.run(
+                role="qa-engineer", prompt="test it", system_prompt="You are QA",
+                tools=[], model="gpt-5.4", model_config=ModelConfig(),
+                mcp_servers={}, on_event=AsyncMock(),
+            )
+            await engine.stop()
+
+        assert result == "feature implemented"
+
+    @pytest.mark.asyncio
+    async def test_run_emits_agent_message_event(self):
+        session = self._make_mock_session("result text")
+        mock_client = MagicMock()
+        mock_client.start = AsyncMock()
+        mock_client.stop = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=session)
+
+        events = []
+        async def on_event(e): events.append(e)
+
+        with patch("main.CopilotClient", return_value=mock_client), \
+             patch("main.SubprocessConfig"):
+            engine = CopilotEngine(AppSettings(copilot_github_token="gh-tok"))
+            await engine.start()
+            await engine.run(
+                role="qa-engineer", prompt="test", system_prompt="sys",
+                tools=[], model="gpt-5.4", model_config=ModelConfig(),
+                mcp_servers={}, on_event=on_event,
+            )
+
+        agent_msgs = [e for e in events if e["type"] == "agent_message"]
+        assert len(agent_msgs) == 1
+        assert agent_msgs[0]["role"] == "qa-engineer"
+
+    @pytest.mark.asyncio
+    async def test_run_passes_mcp_servers_to_create_session(self):
+        session = self._make_mock_session()
+        mock_client = MagicMock()
+        mock_client.start = AsyncMock()
+        mock_client.stop = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=session)
+
+        mcp = {"my-server": {"type": "local", "command": "python", "args": ["./s.py"], "tools": ["*"]}}
+
+        with patch("main.CopilotClient", return_value=mock_client), \
+             patch("main.SubprocessConfig"):
+            engine = CopilotEngine(AppSettings(copilot_github_token="gh-tok"))
+            await engine.start()
+            await engine.run(
+                role="build-agent", prompt="build", system_prompt="sys",
+                tools=[], model="gpt-5-mini", model_config=ModelConfig(),
+                mcp_servers=mcp, on_event=AsyncMock(),
+            )
+
+        call_cfg = mock_client.create_session.call_args[0][0]
+        assert call_cfg["mcp_servers"] == mcp
+
+    @pytest.mark.asyncio
+    async def test_run_passes_provider_config_in_advanced_mode(self):
+        session = self._make_mock_session()
+        mock_client = MagicMock()
+        mock_client.start = AsyncMock()
+        mock_client.stop = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=session)
+
+        mc = ModelConfig(mode="advanced", model="my-model", provider_type="openai",
+                         base_url="https://custom.api.com", api_key="sk-custom")
+
+        with patch("main.CopilotClient", return_value=mock_client), \
+             patch("main.SubprocessConfig"):
+            engine = CopilotEngine(AppSettings(copilot_github_token="gh-tok"))
+            await engine.start()
+            await engine.run(
+                role="code-reviewer", prompt="review", system_prompt="sys",
+                tools=[], model="my-model", model_config=mc,
+                mcp_servers={}, on_event=AsyncMock(),
+            )
+
+        call_cfg = mock_client.create_session.call_args[0][0]
+        assert call_cfg["provider"]["type"] == "openai"
+        assert call_cfg["provider"]["base_url"] == "https://custom.api.com"
+        assert call_cfg["provider"]["api_key"] == "sk-custom"

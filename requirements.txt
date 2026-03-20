@@ -3,6 +3,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.29
 sse-starlette>=2.1
 aiofiles>=24.1
+github-copilot-sdk
 
 # dev / testing
 pytest>=8.0

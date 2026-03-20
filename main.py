@@ -17,6 +17,12 @@ try:
 except ImportError:
     aiosqlite = None  # type: ignore  — only required for web/RunManager mode
 
+try:
+    from copilot import CopilotClient, SubprocessConfig
+except ImportError:
+    CopilotClient = None   # type: ignore  — only required when Copilot engine is used
+    SubprocessConfig = None  # type: ignore
+
 from claude_agent_sdk import (
     AgentDefinition,
     AssistantMessage,
@@ -241,6 +247,90 @@ class ClaudeEngine:
                         await on_event({"type": "agent_message", "role": role, "text": block.text[:300]})
             elif isinstance(msg, ResultMessage):
                 result = msg.result
+        return result
+
+
+class CopilotEngine:
+    def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+        self._client = None
+
+    async def start(self) -> None:
+        if CopilotClient is None:
+            raise SystemExit(
+                "github-copilot-sdk not installed and/or Copilot CLI not found.\n"
+                "Install SDK:  pip install github-copilot-sdk\n"
+                "Install CLI:  https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"
+            )
+        token = (
+            self._settings.copilot_github_token
+            or os.environ.get("COPILOT_GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or os.environ.get("GITHUB_TOKEN")
+        )
+        if not token:
+            raise RuntimeError(
+                "Copilot engine requires a GitHub token. "
+                "Set copilot_github_token in settings or one of the env vars: "
+                "COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN"
+            )
+        self._client = CopilotClient(SubprocessConfig(github_token=token))
+        await self._client.start()
+
+    async def stop(self) -> None:
+        if self._client is not None:
+            await self._client.stop()
+            self._client = None
+
+    async def run(
+        self,
+        role: str,
+        prompt: str,
+        system_prompt: str,
+        tools: list[str],
+        model: str,
+        model_config: ModelConfig,
+        mcp_servers: dict[str, dict],
+        on_event: Callable[[dict], Awaitable[None]],
+    ) -> str:
+        session_cfg: dict = {
+            "model": model,
+            "system_message": {"role": "system", "content": system_prompt},
+        }
+        if mcp_servers:
+            session_cfg["mcp_servers"] = mcp_servers
+        if model_config.mode == "advanced" and model_config.base_url:
+            session_cfg["provider"] = {
+                "type": model_config.provider_type,
+                "base_url": model_config.base_url,
+                "api_key": model_config.api_key,
+                **model_config.extra_params,
+            }
+
+        try:
+            session = await self._client.create_session(session_cfg)
+        except Exception as e:
+            raise RuntimeError(f"CopilotEngine: failed to create session for '{role}': {e}") from e
+
+        result = ""
+        done = asyncio.Event()
+
+        def _on_event(event) -> None:
+            nonlocal result
+            etype = event.type.value if hasattr(event.type, "value") else str(event.type)
+            if etype == "assistant.message":
+                result = str(getattr(event.data, "content", ""))
+            elif etype == "session.idle":
+                done.set()
+
+        session.on(_on_event)
+        try:
+            await session.send(prompt)
+            await done.wait()
+        finally:
+            await session.disconnect()
+
+        await on_event({"type": "agent_message", "role": role, "text": result[:300]})
         return result
 
 

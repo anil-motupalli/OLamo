@@ -901,6 +901,35 @@ class TestApiSettings:
         assert resp.status_code == 200
         assert resp.json()["config"]["pm_model"] == "haiku"
 
+    def test_get_settings_includes_agent_configs(self, client):
+        assert "agent_configs" in client.get("/api/settings").json()["config"]
+
+    def test_get_settings_includes_copilot_github_token(self, client):
+        assert "copilot_github_token" in client.get("/api/settings").json()["config"]
+
+    def test_put_settings_accepts_agent_configs(self, client):
+        payload = {"agent_configs": {"developer": {
+            "engine": "copilot",
+            "model_config": {"mode": "simple", "model": "gpt-5",
+                             "provider_type": "openai", "base_url": "",
+                             "api_key": "", "extra_params": {}},
+            "mcp_servers": {}
+        }}}
+        resp = client.put("/api/settings", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["config"]["agent_configs"]["developer"]["engine"] == "copilot"
+
+    def test_put_settings_advanced_missing_base_url_returns_422(self, client):
+        payload = {"agent_configs": {"developer": {
+            "engine": "claude",
+            "model_config": {"mode": "advanced", "model": "gpt-4",
+                             "provider_type": "openai", "base_url": "",
+                             "api_key": "", "extra_params": {}},
+            "mcp_servers": {}
+        }}}
+        resp = client.put("/api/settings", json=payload)
+        assert resp.status_code == 422
+
 
 class TestApiRuns:
     def test_list_runs_initially_empty(self, client):
@@ -1010,6 +1039,31 @@ class TestApiTeam:
         for agent in agents:
             assert agent["model"], f"{agent['role']} missing model"
             assert agent["description"], f"{agent['role']} missing description"
+
+    def test_each_agent_has_engine_field(self, client):
+        for agent in client.get("/api/team").json()["agents"]:
+            assert agent["engine"] in ("claude", "copilot"), f"{agent['role']} bad engine"
+
+    def test_each_agent_has_config_mode_field(self, client):
+        for agent in client.get("/api/team").json()["agents"]:
+            assert agent["config_mode"] in ("simple", "advanced"), f"{agent['role']} bad config_mode"
+
+    def test_default_engines_match_smart_defaults(self, client):
+        agents = {a["role"]: a for a in client.get("/api/team").json()["agents"]}
+        assert agents["lead-developer"]["engine"] == "claude"
+        assert agents["developer"]["engine"] == "claude"
+        assert agents["code-reviewer"]["engine"] == "copilot"
+        assert agents["qa-engineer"]["engine"] == "copilot"
+        assert agents["build-agent"]["engine"] == "copilot"
+        assert agents["repo-manager"]["engine"] == "copilot"
+
+    def test_copilot_default_agents_report_copilot_model(self, client):
+        agents = {a["role"]: a for a in client.get("/api/team").json()["agents"]}
+        # Smart default models for copilot-engine agents
+        assert agents["code-reviewer"]["model"] == "codex"
+        assert agents["qa-engineer"]["model"] == "gpt-5.4"
+        assert agents["build-agent"]["model"] == "gpt-5-mini"
+        assert agents["repo-manager"]["model"] == "gpt-5-mini"
 
 
 class TestSpaFallback:

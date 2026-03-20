@@ -1508,11 +1508,25 @@ def create_app():  # noqa: ANN201
     async def team() -> dict:
         s = store.settings
         agents = build_agents(s)
+        agent_list = []
+        for role, defn in agents.items():
+            cfg = s.agent_configs.get(role) or get_default_engine_config(role, s)
+            # Resolve the effective model: explicit config > engine smart default
+            if cfg.model_config.model:
+                model = cfg.model_config.model
+            elif cfg.engine == "copilot":
+                model = _COPILOT_DEFAULTS.get(role, "")
+            else:
+                model = getattr(s, _CLAUDE_TIER.get(role, "sonnet_model"), "")
+            agent_list.append({
+                "role": role,
+                "model": model,
+                "description": defn.description,
+                "engine": cfg.engine,
+                "config_mode": cfg.model_config.mode,
+            })
         return {
-            "agents": [
-                {"role": role, "model": defn.model, "description": defn.description}
-                for role, defn in agents.items()
-            ],
+            "agents": agent_list,
             "pipeline": ["Design Loop", "Implementation Loop", "Commit & PR", "PR Poll"],
             "cycle_limits": {
                 "max_design_cycles": s.max_design_cycles,
@@ -1529,9 +1543,13 @@ def create_app():  # noqa: ANN201
     @app.put("/api/settings")
     async def update_settings(request: Request) -> dict:
         body = await request.json()
-        fields = AppSettings.__dataclass_fields__
-        filtered = {k: v for k, v in body.items() if k in fields}
-        new_settings = AppSettings(**{**asdict(store.settings), **filtered})
+        try:
+            current = asdict(store.settings)
+            merged = {**current, **{k: v for k, v in body.items()
+                                    if k in AppSettings.__dataclass_fields__}}
+            new_settings = _settings_from_dict(merged)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         applied = await store.try_update(new_settings)
         return {"applied": applied, "config": asdict(store.settings)}
 

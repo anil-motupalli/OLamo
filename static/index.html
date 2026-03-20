@@ -380,7 +380,7 @@
                   <span x-text="isAgentMcpOpen(agent.role) ? '▲' : '▼'"></span>
                 </button>
                 <div x-show="isAgentMcpOpen(agent.role)" class="mt-2 space-y-1">
-                  <template x-for="(server, idx) in getAgentMcpList(agent.role)" :key="idx">
+                  <template x-for="(server, idx) in getAgentMcpList(agent.role)" :key="server._id || idx">
                     <div class="flex items-center gap-2">
                       <input type="text" :value="server.name"
                         @input="setMcpName(agent.role, idx, $event.target.value)"
@@ -638,6 +638,9 @@ function app() {
         const res = await fetch('/api/settings');
         this.settings = await res.json();
         this.settingsForm = { ...this.settings.config };
+        this._agentMcpLists = {};
+        this._agentExtraParamsRaw = {};
+        this._agentExtraParamsErr = {};
       } catch {}
     },
 
@@ -728,14 +731,16 @@ function app() {
     getAgentMcpList(role) {
       if (!this._agentMcpLists[role]) {
         const s = this._getAgentCfg(role).mcp_servers || {};
+        let _id = 0;
         this._agentMcpLists[role] = Object.entries(s).map(([name, cfg]) =>
-          ({ name, config: JSON.stringify(cfg) }));
+          ({ name, config: JSON.stringify(cfg), _id: _id++ }));
       }
       return this._agentMcpLists[role];
     },
     addMcpServer(role) {
       if (!this._agentMcpLists[role]) this._agentMcpLists[role] = [];
-      this._agentMcpLists[role].push({ name: '', config: '{}' });
+      const list = this._agentMcpLists[role];
+      this._agentMcpLists[role].push({ name: '', config: '{}', _id: list.length > 0 ? Math.max(...list.map(s => s._id)) + 1 : 0 });
     },
     removeMcpServer(role, idx) { this._agentMcpLists[role].splice(idx, 1); this._syncMcp(role); },
     setMcpName(role, idx, val) { this._agentMcpLists[role][idx].name = val; this._syncMcp(role); },

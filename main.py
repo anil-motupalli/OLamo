@@ -1548,7 +1548,7 @@ def create_app():  # noqa: ANN201
             merged = {**current, **{k: v for k, v in body.items()
                                     if k in AppSettings.__dataclass_fields__}}
             new_settings = _settings_from_dict(merged)
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             raise HTTPException(status_code=422, detail=str(e))
         applied = await store.try_update(new_settings)
         return {"applied": applied, "config": asdict(store.settings)}

@@ -1065,6 +1065,37 @@ class TestApiTeam:
         assert agents["build-agent"]["model"] == "gpt-5-mini"
         assert agents["repo-manager"]["model"] == "gpt-5-mini"
 
+    def test_claude_default_agents_report_claude_tier_model(self, client):
+        agents = {a["role"]: a for a in client.get("/api/team").json()["agents"]}
+        assert agents["lead-developer"]["model"] == OPUS_MODEL
+        assert agents["developer"]["model"] == SONNET_MODEL
+
+    def test_agent_config_override_reflected_in_team(self, client):
+        # PUT an override for developer → copilot + explicit model
+        client.put("/api/settings", json={"agent_configs": {"developer": {
+            "engine": "copilot",
+            "model_config": {"mode": "simple", "model": "gpt-5",
+                             "provider_type": "openai", "base_url": "",
+                             "api_key": "", "extra_params": {}},
+            "mcp_servers": {}
+        }}})
+        agents = {a["role"]: a for a in client.get("/api/team").json()["agents"]}
+        assert agents["developer"]["engine"] == "copilot"
+        assert agents["developer"]["model"] == "gpt-5"
+        assert agents["developer"]["config_mode"] == "simple"
+
+    def test_put_settings_unknown_model_config_key_returns_422(self, client):
+        payload = {"agent_configs": {"developer": {
+            "engine": "claude",
+            "model_config": {"mode": "simple", "model": "claude-sonnet-4-6",
+                             "provider_type": "openai", "base_url": "",
+                             "api_key": "", "extra_params": {},
+                             "unknown_key": "surprise"},
+            "mcp_servers": {}
+        }}}
+        resp = client.put("/api/settings", json=payload)
+        assert resp.status_code == 422
+
 
 class TestSpaFallback:
     def test_root_serves_index_html(self, client):

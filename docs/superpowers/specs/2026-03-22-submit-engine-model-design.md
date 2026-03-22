@@ -35,16 +35,25 @@ settings_override = {
 }
 ```
 
-At the start of `run_pipeline_orchestrated`, after loading global `settings`, merge per-run overrides:
+The merge happens in `RunManager._execute_run`, after the existing scalar override merge. The existing scalar merge must explicitly **exclude** `agent_configs` to prevent it from being passed as a raw dict into `AppSettings`:
 
 ```python
+# Existing scalar merge — exclude agent_configs to avoid type collision
+fields = {f.name for f in dataclasses.fields(AppSettings)} - {"agent_configs"}
+filtered = {k: v for k, v in run.settings_override.items() if k in fields}
+settings = AppSettings(**{**asdict(base), **filtered})
+
+# New: per-run agent config override
 run_agent_overrides = run.settings_override.get("agent_configs", {})
 if run_agent_overrides:
-    merged = dict(settings.agent_configs)
+    merged_agents = dict(settings.agent_configs)
     for role, cfg_dict in run_agent_overrides.items():
-        merged[role] = _agent_engine_config_from_dict(cfg_dict)
-    settings = dataclasses.replace(settings, agent_configs=merged)
+        merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
+    from dataclasses import replace  # add to top-level imports
+    settings = replace(settings, agent_configs=merged_agents)
 ```
+
+Add `replace` to the existing `from dataclasses import asdict, dataclass, field` import line.
 
 This is a shallow per-role merge: roles present in `run_agent_overrides` replace the global config for that role; all others use global settings.
 
@@ -52,7 +61,8 @@ This is a shallow per-role merge: roles present in `run_agent_overrides` replace
 
 ### Testing
 
-- `test_run_agent_config_override_takes_precedence` — create a run with `settings_override.agent_configs` overriding one role; assert `_resolve(role)` in the pipeline returns the overridden engine/model while other roles use global defaults.
+- `test_run_agent_config_override_takes_precedence` — construct a `RunRecord` with `settings_override={"agent_configs": {"developer": {"engine": "copilot", "model_config": {...}, "mcp_servers": {}}}}` and default global settings; call `_execute_run`; assert the developer agent resolves to copilot engine while all other agents use global defaults.
+- `test_existing_scalar_overrides_still_work` — verify that `max_design_cycles` override in `settings_override` still applies correctly after the `agent_configs` exclusion change.
 
 ---
 
@@ -60,7 +70,7 @@ This is a shallow per-role merge: roles present in `run_agent_overrides` replace
 
 ### Agent cards grid
 
-Below the task description textarea, a responsive CSS grid renders one card per agent (data sourced from `GET /api/team` on page load, stored in `this.team`).
+Below the task description textarea, a responsive CSS grid (wraps at any column count) renders one card per agent — sourced from `this.team.agents` (already loaded by `GET /api/team` on page load).
 
 Each card (default/collapsed state):
 - Role name (bold)
@@ -72,13 +82,31 @@ Each card (default/collapsed state):
 Expanded state (click to open, only one open at a time):
 - Engine toggle: `[Claude] [Copilot]`
 - Model text input (pre-filled with current model)
-- `Subscription ▲` / `API (BYOK) ▼` toggle
+- `Subscription ▲` / `API (BYOK) ▼` toggle (labels only; internal mode values remain `"simple"` / `"advanced"`)
 - When `API (BYOK)` expanded: Provider dropdown, Base URL, API Key, Extra Params inputs
 - A second click on the card (or clicking another card) collapses it
 
+### Alpine.js state additions (in `app()`)
+
+```javascript
+_submitAgentCfgs: {},   // role → full AgentEngineConfig-shaped dict, initialized from this.team.agents
+_submitCardOpen: null,  // role string of currently expanded card, or null
+_savingDefaults: false, // true while PUT /api/settings is in flight
+```
+
+`_submitAgentCfgs` is populated (or refreshed) each time `loadTeam()` completes, by mapping `this.team.agents` into a dict keyed by role. Card edits mutate `_submitAgentCfgs[role]` directly. This is the single source of truth for both display and submission.
+
+**Dirty detection** (used to show "Save as default" and to build `settings_override.agent_configs`): at submit time and for button visibility, compare each role's current `_submitAgentCfgs[role]` against the corresponding entry in `this.team.agents` using a JSON-string equality check (`JSON.stringify`). Only roles that differ are included in `settings_override.agent_configs`. This naturally handles "change back to default" — if a user edits a card and then restores it, the comparison returns equal and the role is excluded.
+
 ### "Save as default" button
 
-Appears below the card grid when any card's config differs from `this.team` (the loaded defaults). Clicking it calls `PUT /api/settings` with `{ agent_configs: <current overrides> }` and hides the button on success.
+Appears below the card grid when any role's `_submitAgentCfgs[role]` differs from its `this.team.agents` counterpart (dirty detection above). Clicking it:
+1. Sets `_savingDefaults = true` (disables both the "Save as default" and "Submit" buttons while in flight)
+2. Calls `PUT /api/settings` with `{ agent_configs: <full _submitAgentCfgs dict> }` — the full dict, not just changed roles, so the server replaces the entire stored `agent_configs`
+3. On success: re-calls `loadTeam()` to refresh the baseline; hides button
+4. On failure: shows inline error; clears `_savingDefaults`
+
+The "Submit" button is disabled while `_savingDefaults` is true to prevent a race between the settings write and the run creation.
 
 ### Form submission
 
@@ -92,14 +120,7 @@ Appears below the card grid when any card's config differs from `this.team` (the
 }
 ```
 
-Only roles that were explicitly changed by the user are included in `settings_override.agent_configs`. Unchanged roles are omitted (they fall back to global settings in the pipeline).
-
-### Alpine.js state additions (in `app()`)
-
-```javascript
-_submitAgentOverrides: {},   // role → AgentEngineConfig dict, only modified roles
-_submitCardOpen: null,       // role string of currently expanded card, or null
-```
+`settings_override.agent_configs` contains only the roles that differ from `this.team.agents` (dirty detection). If no roles differ, `settings_override` is omitted from the payload entirely.
 
 ---
 
@@ -109,14 +130,18 @@ The rename applies to **display labels only**. The underlying `ModelConfig.mode`
 
 ### Changes in `static/index.html`
 
-| Before | After |
-|---|---|
-| `'Simple ▲'` (button text) | `'Subscription ▲'` |
-| `'Advanced ▼'` (button text) | `'API (BYOK) ▼'` |
-| Any tooltip or label referencing "simple mode" | "Subscription mode (no per-request cost)" |
-| Any tooltip or label referencing "advanced mode" | "API (BYOK) mode (pay per request)" |
+Two separate locations:
 
-Affected locations: the `x-text` expression on `toggleAgentAdvanced` buttons in the Settings tab Agents section, and the equivalent in the new submit form expanded card.
+**Settings tab — Agents section** (existing code, line ~336):
+```javascript
+// Before:
+x-text="isAgentAdvanced(agent.role) ? 'Simple ▲' : 'Advanced ▼'"
+// After:
+x-text="isAgentAdvanced(agent.role) ? 'Subscription ▲' : 'API (BYOK) ▼'"
+```
+
+**Submit form — expanded card** (new code added by this spec):
+Same `Subscription ▲` / `API (BYOK) ▼` labels on the mode toggle button in the expanded card UI.
 
 ### No changes in `main.py`
 
@@ -128,10 +153,11 @@ Affected locations: the `x-text` expression on `toggleAgentAdvanced` buttons in 
 
 | Scenario | Behaviour |
 |---|---|
-| `GET /api/team` fails on page load | Submit form shows cards with placeholder "–" model names; submit still works with global settings |
-| `PUT /api/settings` fails on "Save as default" | Show inline error below the button; don't block submission |
+| `GET /api/team` fails on page load | Submit form shows no agent cards (grid is empty); submit still works without `settings_override` |
+| `PUT /api/settings` fails on "Save as default" | Show inline error below the button; clear `_savingDefaults`; do not block submission |
 | Invalid `API (BYOK)` JSON in Extra Params on submit | Client-side validation blocks submission, same as Settings tab today |
-| `POST /api/runs` receives malformed `agent_configs` | Existing `_agent_engine_config_from_dict` raises `TypeError`; caught as 422 in `update_settings` (already fixed); run creation handler should similarly catch and return 422 |
+| `POST /api/runs` receives malformed `agent_configs` | Parsing occurs in `_execute_run` (not at request time); malformed config raises an exception that sets `run.status = FAILED` with an error message — this is the correct outcome |
+| `_savingDefaults` true when user clicks Submit | Submit button is disabled; no double-flight possible |
 
 ---
 

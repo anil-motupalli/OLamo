@@ -62,9 +62,21 @@ Reuses the existing `POST /api/runs` with both `pr_url` and `description` set. T
 { "pr_url": "<pr.url>", "description": "PR #<number>: <title>" }
 ```
 
+### GitHub auth endpoints
+
+**`GET /api/prs/auth`**
+
+Runs `gh auth status` via `subprocess.run`. Returns `{ "authenticated": true, "user": "<login>" }` on success, or `{ "authenticated": false, "user": null }` if not logged in or `gh` not installed. Never raises a 5xx.
+
+**`POST /api/prs/auth/login`**
+
+Launches `gh auth login --web --git-protocol https` as a non-blocking background process (`asyncio.create_task` wrapping `asyncio.create_subprocess_exec`). Returns immediately with `{ "status": "opening_browser" }`. The browser opens to GitHub's OAuth page. The frontend polls `GET /api/prs/auth` every 2 seconds until `authenticated: true`, then calls `loadPrs()` to populate the sidebar automatically.
+
+If `gh` is not on PATH, returns `{ "status": "error", "error": "gh not installed" }`.
+
 ### Helper
 
-A private `_run_gh(args: list[str]) -> dict` function wraps `subprocess.run(['gh'] + args, capture_output=True, text=True)`, parses stdout as JSON, and raises `RuntimeError` on non-zero exit or JSON parse failure. Also catches `FileNotFoundError` (raised when `gh` is not on PATH) and re-raises as `RuntimeError("gh not installed")`. Used by both new endpoints.
+A private `_run_gh(args: list[str]) -> dict` function wraps `subprocess.run(['gh'] + args, capture_output=True, text=True)`, parses stdout as JSON, and raises `RuntimeError` on non-zero exit or JSON parse failure. Also catches `FileNotFoundError` (raised when `gh` is not on PATH) and re-raises as `RuntimeError("gh not installed")`. Used by the PR list and check endpoints (not the auth endpoints, which handle their own subprocess calls).
 
 ---
 
@@ -105,12 +117,28 @@ Open PRs (3)          [↻ refresh]
 | Array with any `"FAILURE"` | "CI: failing" + list of failing check names |
 | `null` or empty array | "CI: no checks configured" |
 
+### Auth flow in sidebar
+
+When `GET /api/prs` returns an auth-related error (detected by `authenticated: false` from `GET /api/prs/auth` or an error message containing "authentication"), the sidebar shows:
+
+```
+Not logged in to GitHub
+[Login with GitHub]
+```
+
+Clicking "Login with GitHub":
+1. Calls `POST /api/prs/auth/login` — browser opens to GitHub OAuth
+2. Sidebar shows "Opening browser…" with a spinner
+3. Frontend polls `GET /api/prs/auth` every 2 seconds
+4. When `authenticated: true` is returned, calls `loadPrs()` and restores the normal PR list view
+
 ### Error / empty states
 
 | Condition | Display |
 |---|---|
-| `repo: null` or `error` set | "GitHub repo not detected" one-liner, no list |
-| `gh` not installed | "GitHub CLI not available" |
+| `repo: null` or non-auth error | "GitHub repo not detected" one-liner, no list |
+| `gh` not installed | "GitHub CLI not available — install from cli.github.com" |
+| Not authenticated | "Not logged in to GitHub" + "Login with GitHub" button |
 | No open PRs | "No open PRs" |
 | Quick check returns `error` field | Inline "Could not load — retry" link |
 | `activeRun` not null | "Full run" button disabled with tooltip "A run is already in progress" |
@@ -123,7 +151,8 @@ Open PRs (3)          [↻ refresh]
 |---|---|
 | `gh` not on PATH | `_run_gh` catches `FileNotFoundError`, raises `RuntimeError`; endpoint returns `error` field |
 | Not in a git repo | `gh pr list` exits non-zero; `_run_gh` raises `RuntimeError`; endpoint returns `error` field |
-| No GitHub auth | Same as above |
+| No GitHub auth | `GET /api/prs/auth` returns `authenticated: false`; sidebar shows "Login with GitHub" button |
+| `POST /api/prs/auth/login` called, `gh` missing | Returns `{ "status": "error" }`; sidebar shows install instructions |
 | `POST /api/runs` fails for full run | Existing error handling in submit flow |
 | Quick check `statusCheckRollup` is null | Display "CI: no checks configured" |
 
@@ -136,6 +165,8 @@ Open PRs (3)          [↻ refresh]
 - `test_get_prs_not_in_git_repo` — mock `subprocess.run` returning non-zero exit code; assert same
 - `test_get_pr_check_returns_data` — mock `subprocess.run` returning valid `gh pr view` JSON; assert pass-through
 - `test_get_pr_check_error` — mock `subprocess.run` raising `RuntimeError`; assert response has `error` field
+- `test_get_prs_auth_authenticated` — mock `gh auth status` returning exit code 0; assert `{ "authenticated": true }` with username
+- `test_get_prs_auth_not_authenticated` — mock `gh auth status` returning non-zero exit; assert `{ "authenticated": false }`
 
 ---
 
@@ -144,4 +175,4 @@ Open PRs (3)          [↻ refresh]
 - Filtering/searching PRs
 - Showing closed or merged PRs
 - Inline comment resolution from the sidebar (use Full run for that)
-- GitHub App or OAuth authentication (relies on `gh` CLI ambient auth)
+- GitHub App or OAuth authentication beyond `gh auth login --web` (relies on `gh` CLI)

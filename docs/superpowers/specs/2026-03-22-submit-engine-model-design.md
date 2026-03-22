@@ -39,7 +39,8 @@ The merge happens in `RunManager._execute_run`, after the existing scalar overri
 
 ```python
 # Existing scalar merge — exclude agent_configs to avoid type collision
-fields = {f.name for f in dataclasses.fields(AppSettings)} - {"agent_configs"}
+# Use __dataclass_fields__ (consistent with existing pattern at line 1362)
+fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
 filtered = {k: v for k, v in run.settings_override.items() if k in fields}
 settings = AppSettings(**{**asdict(base), **filtered})
 

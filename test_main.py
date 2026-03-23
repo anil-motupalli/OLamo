@@ -1541,3 +1541,4 @@ class TestApiPrs:
         data = resp.json()
         assert data["prs"] == []
         assert "error" in data
+        assert data["error"]

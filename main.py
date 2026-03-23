@@ -1581,6 +1581,44 @@ def create_app():  # noqa: ANN201
         applied = await store.try_update(new_settings)
         return {"applied": applied, "config": asdict(store.settings)}
 
+    @app.get("/api/prs/auth")
+    async def prs_auth_status() -> dict:
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return {"authenticated": False, "user": None}
+            user_result = subprocess.run(
+                ["gh", "api", "user", "--jq", ".login"],
+                capture_output=True,
+                text=True,
+            )
+            user = user_result.stdout.strip() if user_result.returncode == 0 else None
+            return {"authenticated": True, "user": user}
+        except FileNotFoundError:
+            return {"authenticated": False, "user": None}
+
+    @app.post("/api/prs/auth/login")
+    async def prs_auth_login() -> dict:
+        try:
+            subprocess.run(["gh", "--version"], capture_output=True, check=False)
+        except FileNotFoundError:
+            return {"status": "error", "error": "gh not installed"}
+
+        async def _launch() -> None:
+            proc = await asyncio.create_subprocess_exec(
+                "gh", "auth", "login", "--web", "--git-protocol", "https",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+
+        asyncio.create_task(_launch())
+        return {"status": "opening_browser"}
+
     @app.get("/{path:path}")
     async def spa_fallback(path: str) -> FileResponse:
         index = static_dir / "index.html"

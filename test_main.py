@@ -1542,3 +1542,29 @@ class TestApiPrs:
         assert data["prs"] == []
         assert "error" in data
         assert data["error"]
+
+    def test_get_prs_auth_authenticated(self, client, monkeypatch):
+        """Returns authenticated:true with username when gh auth status exits 0."""
+        class FakeResult:
+            returncode = 0
+            stdout = "anil"
+            stderr = ""
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
+        resp = client.get("/api/prs/auth")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authenticated"] is True
+        assert data["user"] == "anil"
+
+    def test_get_prs_auth_not_authenticated(self, client, monkeypatch):
+        """Returns authenticated:false when gh auth status exits non-zero."""
+        class FakeResult:
+            returncode = 1
+            stdout = ""
+            stderr = "not logged in"
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
+        resp = client.get("/api/prs/auth")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authenticated"] is False
+        assert data["user"] is None

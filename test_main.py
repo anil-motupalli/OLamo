@@ -1594,3 +1594,54 @@ class TestApiPrs:
         resp = client.post("/api/prs/auth/login")
         assert resp.status_code == 200
         assert resp.json()["status"] == "opening_browser"
+
+    def test_get_prs_returns_list(self, client, monkeypatch):
+        """Lists PRs, sets olamo_created for runs with matching PR number, normalizes author."""
+        import json
+
+        gh_prs = json.dumps([
+            {
+                "number": 42,
+                "title": "Add dark mode",
+                "url": "https://github.com/owner/repo/pull/42",
+                "headRefName": "feature/dark-mode",
+                "author": {"login": "anil"},
+            },
+            {
+                "number": 41,
+                "title": "Fix nav bug",
+                "url": "https://github.com/owner/repo/pull/41",
+                "headRefName": "fix/nav",
+                "author": {"login": "bob"},
+            },
+        ])
+        gh_repo = json.dumps({"nameWithOwner": "owner/repo"})
+
+        def fake_run(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stderr = ""
+            r = R()
+            r.stdout = gh_repo if "repo" in cmd else gh_prs
+            return r
+
+        monkeypatch.setattr("main.subprocess.run", fake_run)
+
+        # Create a run with PR #42 so it becomes olamo_created
+        client.post("/api/runs", json={
+            "description": "fix PR",
+            "pr_url": "https://github.com/owner/repo/pull/42",
+        })
+
+        resp = client.get("/api/prs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["repo"] == "owner/repo"
+        assert len(data["prs"]) == 2
+
+        pr42 = next(p for p in data["prs"] if p["number"] == 42)
+        pr41 = next(p for p in data["prs"] if p["number"] == 41)
+        assert pr42["olamo_created"] is True
+        assert pr41["olamo_created"] is False
+        assert pr42["author"] == "anil"   # normalized from {"login": "anil"}
+        assert pr41["author"] == "bob"

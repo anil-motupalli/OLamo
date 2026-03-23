@@ -1619,6 +1619,41 @@ def create_app():  # noqa: ANN201
         asyncio.create_task(_launch())
         return {"status": "opening_browser"}
 
+    @app.get("/api/prs")
+    async def list_prs() -> dict:
+        try:
+            raw = _run_gh(
+                ["pr", "list", "--json", "number,title,url,headRefName,author", "--state", "open"]
+            )
+            prs_raw: list[dict] = raw if isinstance(raw, list) else []
+
+            olamo_pr_numbers: set[int] = set()
+            for run in manager.all_runs:
+                if run.pr_url:
+                    n = _pr_number_from_url(run.pr_url)
+                    if n is not None:
+                        olamo_pr_numbers.add(n)
+
+            prs = []
+            for pr in prs_raw:
+                author = pr.get("author") or {}
+                if isinstance(author, dict):
+                    author = author.get("login", "")
+                prs.append({
+                    "number": pr["number"],
+                    "title": pr["title"],
+                    "url": pr["url"],
+                    "headRefName": pr["headRefName"],
+                    "author": author,
+                    "olamo_created": pr["number"] in olamo_pr_numbers,
+                })
+
+            repo_info = _run_gh(["repo", "view", "--json", "nameWithOwner"])
+            repo = repo_info.get("nameWithOwner")
+            return {"prs": prs, "repo": repo}
+        except RuntimeError as e:
+            return {"prs": [], "repo": None, "error": str(e)}
+
     @app.get("/{path:path}")
     async def spa_fallback(path: str) -> FileResponse:
         index = static_dir / "index.html"

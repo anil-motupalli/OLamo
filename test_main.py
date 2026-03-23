@@ -1113,10 +1113,8 @@ class TestAgentConfigMerge:
         raw_override = {"max_design_cycles": 3}
         filtered = {k: v for k, v in raw_override.items() if k in fields}
         base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
-        base_dict.update(filtered)  # apply scalar overrides into base_dict before construction
-
-        # This must not raise AttributeError
-        settings = AppSettings(**base_dict, agent_configs=base.agent_configs)
+        # This must not raise TypeError (mirrors production _execute_run pattern)
+        settings = AppSettings(**{**base_dict, **filtered}, agent_configs=base.agent_configs)
         assert settings.max_design_cycles == 3
         assert settings.agent_configs["developer"].engine == "copilot"
 

@@ -1366,7 +1366,7 @@ class RunManager:
             fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
             filtered = {k: v for k, v in run.settings_override.items() if k in fields}
             base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
-            settings = AppSettings(**base_dict, agent_configs=base.agent_configs, **filtered)
+            settings = AppSettings(**{**base_dict, **filtered}, agent_configs=base.agent_configs)
 
             # Per-run agent config override (shallow per-role merge)
             run_agent_overrides = run.settings_override.get("agent_configs", {})

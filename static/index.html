@@ -615,12 +615,23 @@ function app() {
     // Stages reached (from run detail events)
     _stagesReached: new Set(),
 
+    // PR sidebar
+    prs: [],
+    prsLoading: false,
+    prsError: '',
+    prsAuthNeeded: false,
+    prsLoginPending: false,
+    _prsPollInterval: null,
+    prCheckResults: {},
+
     async init() {
       await this.loadRuns();
       this.connectSSE();
+      this.loadPrs();
     },
 
     onViewChange(id) {
+      if (id === 'dashboard') this.loadPrs();
       if (id === 'team') this.loadTeam();
       if (id === 'settings') this.loadSettings();
     },
@@ -764,6 +775,107 @@ function app() {
       } finally {
         this.savingSettings = false;
       }
+    },
+
+    // ── PR sidebar ───────────────────────────────────────────
+    async loadPrs() {
+      this.prsLoading = true;
+      this.prsError = '';
+      this.prsAuthNeeded = false;
+      try {
+        const res = await fetch('/api/prs');
+        const data = await res.json();
+        if (data.error) {
+          const authRes = await fetch('/api/prs/auth');
+          const authData = await authRes.json();
+          if (!authData.authenticated) {
+            this.prsAuthNeeded = true;
+          } else {
+            this.prsError = data.error;
+          }
+        } else {
+          this.prs = data.prs;
+        }
+      } catch {
+        this.prsError = 'Failed to load PRs';
+      } finally {
+        this.prsLoading = false;
+      }
+    },
+
+    async loginGitHub() {
+      this.prsLoginPending = true;
+      try {
+        const res = await fetch('/api/prs/auth/login', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'error') {
+          this.prsError = data.error || 'gh not installed';
+          this.prsLoginPending = false;
+          return;
+        }
+        // Poll every 2 s until authenticated, then reload PRs
+        this._prsPollInterval = setInterval(async () => {
+          const authRes = await fetch('/api/prs/auth');
+          const authData = await authRes.json();
+          if (authData.authenticated) {
+            clearInterval(this._prsPollInterval);
+            this._prsPollInterval = null;
+            this.prsLoginPending = false;
+            this.prsAuthNeeded = false;
+            await this.loadPrs();
+          }
+        }, 2000);
+      } catch {
+        this.prsLoginPending = false;
+        this.prsError = 'Login failed';
+      }
+    },
+
+    async quickCheckPr(number) {
+      // Second click collapses
+      if (this.prCheckResults[number]) {
+        this.prCheckResults = { ...this.prCheckResults, [number]: null };
+        return;
+      }
+      try {
+        const res = await fetch(`/api/prs/${number}/check`);
+        const data = await res.json();
+        this.prCheckResults = { ...this.prCheckResults, [number]: data };
+      } catch {
+        this.prCheckResults = { ...this.prCheckResults, [number]: { error: 'Network error' } };
+      }
+    },
+
+    async fullRunPr(pr) {
+      if (this.activeRun) return;
+      try {
+        const res = await fetch('/api/runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pr_url: pr.url,
+            description: `PR #${pr.number}: ${pr.title}`,
+          }),
+        });
+        if (res.ok) {
+          await this.loadRuns();
+        }
+      } catch {}
+    },
+
+    prCiStatus(number) {
+      const checks = (this.prCheckResults[number] || {}).statusCheckRollup;
+      if (!checks || checks.length === 0) return 'CI: no checks configured';
+      if (checks.some(c => c.conclusion === 'FAILURE')) {
+        const names = checks.filter(c => c.conclusion === 'FAILURE').map(c => c.name).join(', ');
+        return `CI: failing (${names})`;
+      }
+      return 'CI: passing';
+    },
+
+    prUnresolvedCount(number) {
+      const data = this.prCheckResults[number] || {};
+      return (data.comments || []).filter(c => !c.isResolved).length;
     },
 
     // ── Agent config helpers ──────────────────────────────────────

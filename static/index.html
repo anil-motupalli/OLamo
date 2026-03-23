@@ -624,6 +624,10 @@ function app() {
     _prsPollInterval: null,
     prCheckResults: {},
 
+    destroy() {
+      if (this._prsPollInterval) clearInterval(this._prsPollInterval);
+    },
+
     async init() {
       await this.loadRuns();
       this.connectSSE();
@@ -782,6 +786,7 @@ function app() {
       this.prsLoading = true;
       this.prsError = '';
       this.prsAuthNeeded = false;
+      this.prs = [];
       try {
         const res = await fetch('/api/prs');
         const data = await res.json();
@@ -804,6 +809,7 @@ function app() {
     },
 
     async loginGitHub() {
+      if (this._prsPollInterval) return;
       this.prsLoginPending = true;
       try {
         const res = await fetch('/api/prs/auth/login', { method: 'POST' });
@@ -833,7 +839,7 @@ function app() {
 
     async quickCheckPr(number) {
       // Second click collapses
-      if (this.prCheckResults[number]) {
+      if (this.prCheckResults[number] && !this.prCheckResults[number].error) {
         this.prCheckResults = { ...this.prCheckResults, [number]: null };
         return;
       }
@@ -870,6 +876,7 @@ function app() {
         const names = checks.filter(c => c.conclusion === 'FAILURE').map(c => c.name).join(', ');
         return `CI: failing (${names})`;
       }
+      if (checks.some(c => c.conclusion === null)) return 'CI: in progress';
       return 'CI: passing';
     },
 

@@ -1514,3 +1514,30 @@ class TestOrchestrationEngineRouting:
         assert mock_client.start.call_count == 1
         assert mock_client.stop.call_count == 1
         assert mock_client.create_session.call_count >= 8
+
+
+class TestApiPrs:
+    def test_get_prs_gh_not_installed(self, client, monkeypatch):
+        """Returns error field and empty prs list when gh binary not found."""
+        def fake_run(cmd, **kwargs):
+            raise FileNotFoundError()
+        monkeypatch.setattr("main.subprocess.run", fake_run)
+        resp = client.get("/api/prs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prs"] == []
+        assert "error" in data
+        assert data["error"]
+
+    def test_get_prs_not_in_git_repo(self, client, monkeypatch):
+        """Returns error field when gh exits non-zero (e.g. not in a git repo)."""
+        class FakeResult:
+            returncode = 1
+            stdout = ""
+            stderr = "not a git repository"
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
+        resp = client.get("/api/prs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prs"] == []
+        assert "error" in data

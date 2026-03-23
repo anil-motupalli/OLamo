@@ -1568,3 +1568,29 @@ class TestApiPrs:
         data = resp.json()
         assert data["authenticated"] is False
         assert data["user"] is None
+
+    def test_post_prs_auth_login_gh_not_installed(self, client, monkeypatch):
+        """Returns error when gh binary is not found."""
+        def fake_run_missing(cmd, **kwargs):
+            raise FileNotFoundError()
+        monkeypatch.setattr("main.subprocess.run", fake_run_missing)
+        resp = client.post("/api/prs/auth/login")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "not installed" in data["error"]
+
+    def test_post_prs_auth_login_returns_opening_browser(self, client, monkeypatch):
+        """Returns opening_browser status when gh is available."""
+        import unittest.mock as mock
+
+        class FakeResult:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
+        monkeypatch.setattr("main.asyncio.create_task", mock.Mock())
+        resp = client.post("/api/prs/auth/login")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "opening_browser"

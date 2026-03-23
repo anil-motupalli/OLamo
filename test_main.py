@@ -990,6 +990,114 @@ class TestApiRuns:
         assert resp.status_code == 201
         assert resp.json()["pr_url"] == ""
 
+    def test_create_run_with_agent_configs_override(self, client):
+        """settings_override.agent_configs is stored in the run record."""
+        payload = {
+            "description": "custom agent run",
+            "settings_override": {
+                "agent_configs": {
+                    "developer": {
+                        "engine": "copilot",
+                        "model_config": {
+                            "mode": "simple",
+                            "model": "gpt-5",
+                            "provider_type": "openai",
+                            "base_url": "",
+                            "api_key": "",
+                            "extra_params": {},
+                        },
+                        "mcp_servers": {},
+                    }
+                }
+            },
+        }
+        resp = client.post("/api/runs", json=payload)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["settings_override"]["agent_configs"]["developer"]["engine"] == "copilot"
+
+    def test_existing_scalar_overrides_still_work_with_agent_configs_excluded(self, client):
+        """max_design_cycles override still applies when agent_configs is also present."""
+        payload = {
+            "description": "scalar + agent override",
+            "settings_override": {
+                "max_design_cycles": 7,
+                "agent_configs": {
+                    "developer": {
+                        "engine": "copilot",
+                        "model_config": {
+                            "mode": "simple",
+                            "model": "gpt-5",
+                            "provider_type": "openai",
+                            "base_url": "",
+                            "api_key": "",
+                            "extra_params": {},
+                        },
+                        "mcp_servers": {},
+                    }
+                },
+            },
+        }
+        resp = client.post("/api/runs", json=payload)
+        assert resp.status_code == 201
+        # The run record should store the override as-is
+        assert resp.json()["settings_override"]["max_design_cycles"] == 7
+
+
+class TestAgentConfigMerge:
+    """Unit tests for per-run agent_configs merge in _execute_run."""
+
+    def test_agent_config_override_takes_precedence(self):
+        """Per-run agent_configs override replaces the global config for that role."""
+        from main import AppSettings, AgentEngineConfig, ModelConfig, _agent_engine_config_from_dict
+
+        base = AppSettings()  # all defaults (claude engine for lead-developer, etc.)
+
+        override_dict = {
+            "engine": "copilot",
+            "model_config": {
+                "mode": "simple",
+                "model": "gpt-5",
+                "provider_type": "openai",
+                "base_url": "",
+                "api_key": "",
+                "extra_params": {},
+            },
+            "mcp_servers": {},
+        }
+
+        run_agent_overrides = {"developer": override_dict}
+        merged_agents = dict(base.agent_configs)
+        for role, cfg_dict in run_agent_overrides.items():
+            merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
+
+        from dataclasses import replace
+        merged_settings = replace(base, agent_configs=merged_agents)
+
+        assert merged_settings.agent_configs["developer"].engine == "copilot"
+        assert merged_settings.agent_configs["developer"].model_config.model == "gpt-5"
+        # Other roles are untouched
+        lead_cfg = merged_settings.agent_configs.get("lead-developer")
+        if lead_cfg:
+            assert lead_cfg.engine == base.agent_configs.get("lead-developer", AgentEngineConfig()).engine
+
+    def test_scalar_override_excludes_agent_configs(self):
+        """agent_configs key is excluded from the scalar AppSettings merge to avoid TypeError."""
+        from dataclasses import asdict
+        from main import AppSettings
+
+        base = AppSettings()
+        raw_override = {
+            "max_design_cycles": 7,
+            "agent_configs": {"developer": {"engine": "copilot", "model_config": {}, "mcp_servers": {}}},
+        }
+        fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
+        filtered = {k: v for k, v in raw_override.items() if k in fields}
+        settings = AppSettings(**{**asdict(base), **filtered})
+        assert settings.max_design_cycles == 7
+        # agent_configs was excluded from scalar merge — base defaults preserved
+        assert settings.agent_configs == base.agent_configs
+
 
 class TestApiApproval:
     def test_get_approval_returns_404_for_unknown_run(self, client):

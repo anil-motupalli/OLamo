@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -1360,9 +1360,19 @@ class RunManager:
         # Apply per-run settings override on top of global settings
         base = self._store.settings
         if run.settings_override:
-            fields = AppSettings.__dataclass_fields__
+            # Exclude agent_configs from scalar merge — it contains AgentEngineConfig objects
+            # and must be merged separately below using dataclasses.replace
+            fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
             filtered = {k: v for k, v in run.settings_override.items() if k in fields}
             settings = AppSettings(**{**asdict(base), **filtered})
+
+            # Per-run agent config override (shallow per-role merge)
+            run_agent_overrides = run.settings_override.get("agent_configs", {})
+            if run_agent_overrides:
+                merged_agents = dict(settings.agent_configs)
+                for role, cfg_dict in run_agent_overrides.items():
+                    merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
+                settings = replace(settings, agent_configs=merged_agents)
         else:
             settings = base
 

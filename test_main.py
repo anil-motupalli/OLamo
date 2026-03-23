@@ -1050,8 +1050,13 @@ class TestAgentConfigMerge:
     def test_agent_config_override_takes_precedence(self):
         """Per-run agent_configs override replaces the global config for that role."""
         from main import AppSettings, AgentEngineConfig, ModelConfig, _agent_engine_config_from_dict
+        from dataclasses import replace
 
-        base = AppSettings()  # all defaults (claude engine for lead-developer, etc.)
+        # Pre-populate base with two roles so we can verify only developer is overridden
+        base = AppSettings(agent_configs={
+            "developer": AgentEngineConfig(engine="claude"),
+            "reviewer": AgentEngineConfig(engine="claude"),
+        })
 
         override_dict = {
             "engine": "copilot",
@@ -1071,15 +1076,12 @@ class TestAgentConfigMerge:
         for role, cfg_dict in run_agent_overrides.items():
             merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
 
-        from dataclasses import replace
         merged_settings = replace(base, agent_configs=merged_agents)
 
         assert merged_settings.agent_configs["developer"].engine == "copilot"
         assert merged_settings.agent_configs["developer"].model_config.model == "gpt-5"
-        # Other roles are untouched
-        lead_cfg = merged_settings.agent_configs.get("lead-developer")
-        if lead_cfg:
-            assert lead_cfg.engine == base.agent_configs.get("lead-developer", AgentEngineConfig()).engine
+        # Reviewer role is untouched
+        assert merged_settings.agent_configs["reviewer"].engine == "claude"
 
     def test_scalar_override_excludes_agent_configs(self):
         """agent_configs key is excluded from the scalar AppSettings merge to avoid TypeError."""
@@ -1097,6 +1099,26 @@ class TestAgentConfigMerge:
         assert settings.max_design_cycles == 7
         # agent_configs was excluded from scalar merge — base defaults preserved
         assert settings.agent_configs == base.agent_configs
+
+    def test_scalar_merge_with_nonempty_agent_configs_does_not_raise(self):
+        """asdict(base) must not pass agent_configs plain dicts into AppSettings constructor."""
+        from dataclasses import asdict
+        from main import AppSettings, AgentEngineConfig
+
+        # Global settings with a configured agent (simulates production state)
+        base = AppSettings(agent_configs={"developer": AgentEngineConfig(engine="copilot")})
+
+        # Simulate what _execute_run does with a scalar override
+        fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
+        raw_override = {"max_design_cycles": 3}
+        filtered = {k: v for k, v in raw_override.items() if k in fields}
+        base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
+        base_dict.update(filtered)  # apply scalar overrides into base_dict before construction
+
+        # This must not raise AttributeError
+        settings = AppSettings(**base_dict, agent_configs=base.agent_configs)
+        assert settings.max_design_cycles == 3
+        assert settings.agent_configs["developer"].engine == "copilot"
 
 
 class TestApiApproval:
@@ -1192,7 +1214,8 @@ class TestApiTeam:
         assert agents["developer"]["model"] == "gpt-5"
         assert agents["developer"]["config_mode"] == "simple"
 
-    def test_put_settings_unknown_model_config_key_returns_422(self, client):
+    def test_put_settings_unknown_model_config_key_is_silently_dropped(self, client):
+        """Unknown model_config keys are filtered out rather than rejected (forward-compat)."""
         payload = {"agent_configs": {"developer": {
             "engine": "claude",
             "model_config": {"mode": "simple", "model": "claude-sonnet-4-6",
@@ -1202,7 +1225,9 @@ class TestApiTeam:
             "mcp_servers": {}
         }}}
         resp = client.put("/api/settings", json=payload)
-        assert resp.status_code == 422
+        assert resp.status_code == 200
+        agents = {a["role"]: a for a in client.get("/api/team").json()["agents"]}
+        assert agents["developer"]["model"] == "claude-sonnet-4-6"
 
 
 class TestSpaFallback:

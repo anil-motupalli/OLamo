@@ -165,9 +165,10 @@ def get_default_engine_config(role: str, settings: AppSettings) -> AgentEngineCo
 
 def _agent_engine_config_from_dict(d: dict) -> AgentEngineConfig:
     mc = d.get("model_config") or {}
+    known_mc = set(ModelConfig.__dataclass_fields__)
     return AgentEngineConfig(
         engine=d.get("engine", "claude"),
-        model_config=ModelConfig(**mc) if mc else ModelConfig(),
+        model_config=ModelConfig(**{k: v for k, v in mc.items() if k in known_mc}) if mc else ModelConfig(),
         mcp_servers=d.get("mcp_servers") or {},
     )
 
@@ -1364,7 +1365,8 @@ class RunManager:
             # and must be merged separately below using dataclasses.replace
             fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
             filtered = {k: v for k, v in run.settings_override.items() if k in fields}
-            settings = AppSettings(**{**asdict(base), **filtered})
+            base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
+            settings = AppSettings(**base_dict, agent_configs=base.agent_configs, **filtered)
 
             # Per-run agent config override (shallow per-role merge)
             run_agent_overrides = run.settings_override.get("agent_configs", {})

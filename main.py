@@ -1654,6 +1654,15 @@ def create_app():  # noqa: ANN201
         except RuntimeError as e:
             return {"prs": [], "repo": None, "error": str(e)}
 
+    @app.get("/api/prs/{number}/check")
+    async def check_pr(number: int) -> dict:
+        try:
+            return _run_gh(
+                ["pr", "view", str(number), "--json", "comments,reviews,statusCheckRollup"]
+            )
+        except RuntimeError as e:
+            return {"error": str(e)}
+
     @app.get("/{path:path}")
     async def spa_fallback(path: str) -> FileResponse:
         index = static_dir / "index.html"

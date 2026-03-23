@@ -1645,3 +1645,38 @@ class TestApiPrs:
         assert pr41["olamo_created"] is False
         assert pr42["author"] == "anil"   # normalized from {"login": "anil"}
         assert pr41["author"] == "bob"
+
+    def test_get_pr_check_returns_data(self, client, monkeypatch):
+        """Passes gh pr view JSON through to caller."""
+        import json
+        gh_data = {
+            "comments": [],
+            "reviews": [],
+            "statusCheckRollup": [{"name": "CI", "conclusion": "SUCCESS"}],
+        }
+
+        class FakeResult:
+            returncode = 0
+            stderr = ""
+        r = FakeResult()
+        r.stdout = json.dumps(gh_data)
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: r)
+
+        resp = client.get("/api/prs/42/check")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "statusCheckRollup" in data
+        assert data["statusCheckRollup"][0]["conclusion"] == "SUCCESS"
+
+    def test_get_pr_check_error(self, client, monkeypatch):
+        """Returns error field with HTTP 200 when gh fails."""
+        class FakeResult:
+            returncode = 1
+            stdout = ""
+            stderr = "PR not found"
+        monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
+        resp = client.get("/api/prs/99/check")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "error" in data
+        assert data["error"]

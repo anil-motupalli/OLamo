@@ -430,7 +430,7 @@
                   placeholder="model name" />
                 <button @click="toggleAgentAdvanced(agent.role)"
                   class="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
-                  x-text="isAgentAdvanced(agent.role) ? 'Simple ▲' : 'Advanced ▼'"></button>
+                  x-text="isAgentAdvanced(agent.role) ? 'Subscription ▲' : 'API (BYOK) ▼'"></button>
               </div>
               <!-- Advanced fields -->
               <div x-show="isAgentAdvanced(agent.role)" class="mt-2 grid grid-cols-2 gap-2 pl-4">

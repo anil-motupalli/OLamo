@@ -274,12 +274,7 @@
                         <p class="text-xs text-gray-500 mb-1">Model</p>
                         <input type="text"
                           :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).model || ''"
-                          @input="if (!_submitAgentCfgs[agent.role]) _submitAgentCfgs[agent.role] = {};
-                                  if (!_submitAgentCfgs[agent.role].model_config) _submitAgentCfgs[agent.role].model_config = {};
-                                  _submitAgentCfgs[agent.role] = {
-                                    ..._submitAgentCfgs[agent.role],
-                                    model_config: {..._submitAgentCfgs[agent.role].model_config, model: $event.target.value}
-                                  }"
+                          @input="_submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), model: $event.target.value } }"
                           class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-indigo-500"
                           placeholder="model name" />
                       </div>
@@ -287,14 +282,7 @@
                       <!-- Mode toggle (Subscription / API BYOK) -->
                       <div>
                         <button
-                          @click="if (!_submitAgentCfgs[agent.role]) _submitAgentCfgs[agent.role] = {};
-                                  if (!_submitAgentCfgs[agent.role].model_config) _submitAgentCfgs[agent.role].model_config = {};
-                                  const cur = (_submitAgentCfgs[agent.role].model_config || {}).mode;
-                                  const next = cur === 'advanced' ? 'simple' : 'advanced';
-                                  _submitAgentCfgs[agent.role] = {
-                                    ..._submitAgentCfgs[agent.role],
-                                    model_config: {..._submitAgentCfgs[agent.role].model_config, mode: next}
-                                  }"
+                          @click="const cur = (_submitAgentCfgs[agent.role].model_config || {}).mode; const next = cur === 'advanced' ? 'simple' : 'advanced'; _submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {..._submitAgentCfgs[agent.role].model_config, mode: next} }"
                           class="text-xs text-gray-500 hover:text-gray-300"
                           x-text="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' ? 'Subscription ▲' : 'API (BYOK) ▼'">
                         </button>
@@ -307,11 +295,7 @@
                             <label class="block text-xs text-gray-500 mb-1">Provider</label>
                             <select
                               :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).provider_type || 'openai'"
-                              @change="if (!_submitAgentCfgs[agent.role]) _submitAgentCfgs[agent.role] = {};
-                                       _submitAgentCfgs[agent.role] = {
-                                         ..._submitAgentCfgs[agent.role],
-                                         model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), provider_type: $event.target.value}
-                                       }"
+                              @change="_submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), provider_type: $event.target.value} }"
                               class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none">
                               <option value="openai">openai</option>
                               <option value="azure">azure</option>
@@ -322,11 +306,7 @@
                             <label class="block text-xs text-gray-500 mb-1">Base URL</label>
                             <input type="text"
                               :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).base_url || ''"
-                              @input="if (!_submitAgentCfgs[agent.role]) _submitAgentCfgs[agent.role] = {};
-                                      _submitAgentCfgs[agent.role] = {
-                                        ..._submitAgentCfgs[agent.role],
-                                        model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), base_url: $event.target.value}
-                                      }"
+                              @input="_submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), base_url: $event.target.value} }"
                               class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
                               placeholder="https://..." />
                           </div>
@@ -334,11 +314,7 @@
                             <label class="block text-xs text-gray-500 mb-1">API Key</label>
                             <input type="password"
                               :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).api_key || ''"
-                              @input="if (!_submitAgentCfgs[agent.role]) _submitAgentCfgs[agent.role] = {};
-                                      _submitAgentCfgs[agent.role] = {
-                                        ..._submitAgentCfgs[agent.role],
-                                        model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), api_key: $event.target.value}
-                                      }"
+                              @input="_submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), api_key: $event.target.value} }"
                               class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
                               placeholder="sk-..." />
                           </div>
@@ -1111,6 +1087,7 @@ function app() {
     },
 
     async saveSubmitDefaults() {
+      this.submitError = '';
       this._savingDefaults = true;
       try {
         const res = await fetch('/api/settings', {

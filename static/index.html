@@ -213,7 +213,7 @@
         <div class="mt-4 flex items-center gap-3">
           <button
             @click="submitTask()"
-            :disabled="submitting || !submitDesc.trim()"
+            :disabled="submitting || !submitDesc.trim() || _savingDefaults"
             class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm px-5 py-2 rounded transition-colors">
             <span x-show="!submitting">Submit</span>
             <span x-show="submitting">Submitting…</span>
@@ -557,6 +557,9 @@ function app() {
     submitting: false,
     submitOk: false,
     submitError: '',
+    _submitAgentCfgs: {},    // role → AgentEngineConfig-shaped dict, initialized from team.agents
+    _submitCardOpen: null,   // role string of the currently expanded card, or null
+    _savingDefaults: false,  // true while PUT /api/settings is in flight
 
     // Run detail
     selectedRun: null,
@@ -636,6 +639,7 @@ function app() {
 
     onViewChange(id) {
       if (id === 'dashboard') this.loadPrs();
+      if (id === 'submit') this.loadTeam();
       if (id === 'team') this.loadTeam();
       if (id === 'settings') this.loadSettings();
     },
@@ -721,7 +725,10 @@ function app() {
         const res = await fetch('/api/runs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ description: this.submitDesc }),
+          body: JSON.stringify({
+            description: this.submitDesc,
+            ...(this._submitIsDirty() ? { settings_override: { agent_configs: this._submitDirtyRoles() } } : {}),
+          }),
         });
         if (!res.ok) throw new Error(await res.text());
         this.submitOk = true;
@@ -741,6 +748,23 @@ function app() {
         const res = await fetch('/api/team');
         this.team = await res.json();
         this.pipelineStages = this.team.pipeline || this.pipelineStages;
+        // Rebuild submit form baseline from fresh team data
+        const cfgs = {};
+        for (const agent of (this.team.agents || [])) {
+          cfgs[agent.role] = {
+            engine: agent.engine,
+            model_config: {
+              mode: agent.config_mode,
+              model: agent.model,
+              provider_type: 'openai',
+              base_url: '',
+              api_key: '',
+              extra_params: {},
+            },
+            mcp_servers: {},
+          };
+        }
+        this._submitAgentCfgs = cfgs;
       } catch {}
     },
 
@@ -883,6 +907,67 @@ function app() {
     prUnresolvedCount(number) {
       const data = this.prCheckResults[number] || {};
       return (data.comments || []).filter(c => !c.isResolved).length;
+    },
+
+    // ── Submit card helpers ──────────────────────────────────
+    _submitIsDirty() {
+      for (const agent of (this.team.agents || [])) {
+        const current = this._submitAgentCfgs[agent.role];
+        const baseline = {
+          engine: agent.engine,
+          model_config: {
+            mode: agent.config_mode,
+            model: agent.model,
+            provider_type: 'openai',
+            base_url: '',
+            api_key: '',
+            extra_params: {},
+          },
+          mcp_servers: {},
+        };
+        if (JSON.stringify(current) !== JSON.stringify(baseline)) return true;
+      }
+      return false;
+    },
+
+    _submitDirtyRoles() {
+      const dirty = {};
+      for (const agent of (this.team.agents || [])) {
+        const current = this._submitAgentCfgs[agent.role];
+        const baseline = {
+          engine: agent.engine,
+          model_config: {
+            mode: agent.config_mode,
+            model: agent.model,
+            provider_type: 'openai',
+            base_url: '',
+            api_key: '',
+            extra_params: {},
+          },
+          mcp_servers: {},
+        };
+        if (JSON.stringify(current) !== JSON.stringify(baseline)) {
+          dirty[agent.role] = current;
+        }
+      }
+      return dirty;
+    },
+
+    async saveSubmitDefaults() {
+      this._savingDefaults = true;
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_configs: this._submitAgentCfgs }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await this.loadTeam();
+      } catch (err) {
+        this.submitError = err.message || 'Failed to save defaults';
+      } finally {
+        this._savingDefaults = false;
+      }
     },
 
     // ── Agent config helpers ──────────────────────────────────────

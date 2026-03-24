@@ -1,7 +1,7 @@
 # PR Dashboard Design
 
 **Date:** 2026-03-22
-**Status:** Approved
+**Status:** Implemented (2026-03-23)
 **Scope:** Web UI + backend — Runs tab PR sidebar
 
 ---

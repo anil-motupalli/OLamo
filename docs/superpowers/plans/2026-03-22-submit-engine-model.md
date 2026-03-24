@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Implemented (2026-03-23) — all tasks complete, 207 tests passing
+
 **Goal:** (1) Allow per-run engine/model overrides via a card grid in the Submit tab. (2) Rename "Simple/Advanced" labels to "Subscription/API (BYOK)" throughout the UI.
 
 **Architecture:** Backend adds per-run `agent_configs` merging in `_execute_run` (after the existing scalar override merge). Frontend adds `_submitAgentCfgs` state populated from `GET /api/team`, renders one card per agent (data-driven), allows inline editing with dirty-detection, and sends diffs via `settings_override.agent_configs` on submit.

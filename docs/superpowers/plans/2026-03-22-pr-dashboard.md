@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Implemented (2026-03-23) — all tasks complete, 207 tests passing
+
 **Goal:** Add a PR sidebar panel to the Runs/Dashboard tab showing all open GitHub PRs for the current repo, with Quick check and Full run actions, and a GitHub auth flow for unauthenticated users.
 
 **Architecture:** Four new backend endpoints added to `main.py` inside `create_app()` (plus two module-level helper functions). The frontend adds a two-column layout to the Dashboard view with an Alpine.js-driven PR sidebar — state, data fetching, and helper functions live in `app()` in `static/index.html`.

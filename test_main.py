@@ -1721,7 +1721,7 @@ class TestApiPrs:
             stderr = ""
 
         monkeypatch.setattr("main.subprocess.run", lambda cmd, **kw: FakeResult())
-        monkeypatch.setattr("main.asyncio.create_task", mock.Mock())
+        monkeypatch.setattr("main.asyncio.create_task", mock.Mock(side_effect=lambda coro: coro.close()))
         resp = client.post("/api/prs/auth/login")
         assert resp.status_code == 200
         assert resp.json()["status"] == "opening_browser"

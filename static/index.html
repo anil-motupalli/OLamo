@@ -1093,7 +1093,7 @@ function app() {
         const res = await fetch('/api/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_configs: this._submitAgentCfgs }),
+          body: JSON.stringify({ agent_configs: this._submitDirtyRoles() }),
         });
         if (!res.ok) throw new Error(await res.text());
         await this.loadTeam();

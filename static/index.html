@@ -381,7 +381,7 @@
                       </div>
 
                       <!-- API (BYOK) expanded fields -->
-                      <template x-if="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' || (_submitAgentCfgs[agent.role] || {}).engine === 'openai'">
+                      <template x-if="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' || (_submitAgentCfgs[agent.role] || {}).engine === 'openai' || !!((_submitAgentCfgs[agent.role] || {}).model_config || {}).base_url">
                         <div class="space-y-2">
                           <div>
                             <label class="block text-xs text-gray-500 mb-1">Provider</label>
@@ -466,48 +466,89 @@
       </div>
 
       <template x-if="selectedRun">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <!-- Meta -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Details</h2>
-            <dl class="space-y-2 text-sm">
-              <div class="flex justify-between">
-                <dt class="text-gray-500">ID</dt>
-                <dd class="text-gray-300 font-mono text-xs truncate max-w-[140px]" x-text="selectedRun.id"></dd>
-              </div>
-              <div class="flex justify-between">
-                <dt class="text-gray-500">Queued</dt>
-                <dd class="text-gray-300" x-text="fmtDate(selectedRun.queued_at)"></dd>
-              </div>
-              <div class="flex justify-between" x-show="selectedRun.started_at">
-                <dt class="text-gray-500">Started</dt>
-                <dd class="text-gray-300" x-text="fmtDate(selectedRun.started_at)"></dd>
-              </div>
-              <div class="flex justify-between" x-show="selectedRun.completed_at">
-                <dt class="text-gray-500">Completed</dt>
-                <dd class="text-gray-300" x-text="fmtDate(selectedRun.completed_at)"></dd>
-              </div>
-            </dl>
-            <template x-if="selectedRun.error">
-              <div class="mt-4 bg-red-900/30 border border-red-800 rounded p-2 text-xs text-red-300" x-text="selectedRun.error"></div>
-            </template>
-          </div>
+        <div class="space-y-4">
 
-          <!-- Pipeline stages -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Pipeline Stages</h2>
-            <ol class="space-y-2">
-              <template x-for="(stage, i) in pipelineStages" :key="i">
-                <li class="flex items-center gap-3 text-sm">
-                  <div :class="stageReached(stage) ? 'bg-indigo-500' : 'bg-gray-700'" class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" x-text="i + 1"></div>
-                  <span :class="stageReached(stage) ? 'text-indigo-300' : 'text-gray-500'" x-text="stage"></span>
-                </li>
+          <!-- Row 1: Meta + Execution Graph -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- Meta (col 1) -->
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+              <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Details</h2>
+              <dl class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                  <dt class="text-gray-500">ID</dt>
+                  <dd class="text-gray-300 font-mono text-xs truncate max-w-[140px]" x-text="selectedRun.id"></dd>
+                </div>
+                <div class="flex justify-between">
+                  <dt class="text-gray-500">Queued</dt>
+                  <dd class="text-gray-300" x-text="fmtDate(selectedRun.queued_at)"></dd>
+                </div>
+                <div class="flex justify-between" x-show="selectedRun.started_at">
+                  <dt class="text-gray-500">Started</dt>
+                  <dd class="text-gray-300" x-text="fmtDate(selectedRun.started_at)"></dd>
+                </div>
+                <div class="flex justify-between" x-show="selectedRun.completed_at">
+                  <dt class="text-gray-500">Completed</dt>
+                  <dd class="text-gray-300" x-text="fmtDate(selectedRun.completed_at)"></dd>
+                </div>
+              </dl>
+              <template x-if="selectedRun.error">
+                <div class="mt-4 bg-red-900/30 border border-red-800 rounded p-2 text-xs text-red-300" x-text="selectedRun.error"></div>
               </template>
-            </ol>
+            </div>
+
+            <!-- Execution Graph (col 2–3) -->
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 lg:col-span-2">
+              <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Execution Graph</h2>
+              <template x-if="buildExecutionGraph().length === 0">
+                <p class="text-xs text-gray-700">No execution data yet.</p>
+              </template>
+              <div class="overflow-x-auto scrollbar-thin pb-2">
+                <div class="flex items-start gap-1 min-w-max">
+                  <template x-for="(grp, si) in buildExecutionGraph()" :key="si">
+                    <div class="flex items-start gap-1 flex-shrink-0">
+                      <!-- Stage column -->
+                      <div class="flex flex-col items-center min-w-[92px]">
+                        <!-- Stage label badge -->
+                        <div class="text-xs text-indigo-300 font-semibold mb-3 px-2 py-0.5 bg-indigo-900/40 rounded-full border border-indigo-800/40 max-w-[92px] truncate text-center" x-text="grp.label"></div>
+                        <!-- Agent nodes + connectors -->
+                        <div class="flex flex-col items-center">
+                          <template x-for="(agent, ai) in grp.agents" :key="ai">
+                            <div class="flex flex-col items-center">
+                              <div
+                                :class="[rolePillColor(agent.role), agent.running ? 'node-glow ring-2 ring-white/30' : '']"
+                                class="px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap cursor-default transition-all"
+                                :title="agent.role"
+                                x-text="agentLabel(agent.role)">
+                              </div>
+                              <!-- Vertical connector to next node -->
+                              <template x-if="ai < grp.agents.length - 1">
+                                <div class="w-px h-3 bg-gray-700 my-0.5"></div>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                      <!-- Horizontal arrow to next stage -->
+                      <div x-show="si < buildExecutionGraph().length - 1" class="text-gray-600 text-xs self-center mt-5 px-1 flex-shrink-0">→</div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <!-- Live indicator -->
+              <template x-if="selectedRun.status === 'running'">
+                <div class="mt-3 pt-3 border-t border-gray-800/50 flex items-center gap-2 text-xs text-indigo-400">
+                  <div class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>
+                  <span x-text="currentAgent ? agentLabel(currentAgent) + ' running…' : 'Pipeline running…'"></span>
+                  <span class="text-gray-600 font-mono tabular-nums" x-show="currentAgent" x-text="fmtElapsed(agentElapsed)"></span>
+                </div>
+              </template>
+            </div>
+
           </div>
 
-          <!-- Event log -->
-          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 lg:col-span-1">
+          <!-- Row 2: Event log (full width) -->
+          <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
             <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Event Log</h2>
             <div class="h-64 overflow-y-auto scrollbar-thin space-y-1">
               <template x-for="(evt, i) in runDetail.events" :key="i">
@@ -516,6 +557,7 @@
               <p x-show="runDetail.events.length === 0" class="text-gray-600 text-xs">No events recorded.</p>
             </div>
           </div>
+
         </div>
       </template>
     </div>
@@ -663,10 +705,11 @@
                   placeholder="model name" />
                 <button @click="toggleAgentAdvanced(agent.role)"
                   class="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
-                  x-text="isAgentAdvanced(agent.role) ? 'Subscription ▲' : 'API (BYOK) ▼'"></button>
+                  x-show="getAgentEngine(agent.role) !== 'openai'"
+                  x-text="isAgentAdvanced(agent.role) ? 'Custom Provider ▲' : 'Custom Provider (BYOK) ▼'"></button>
               </div>
-              <!-- Advanced fields -->
-              <div x-show="isAgentAdvanced(agent.role) || getAgentEngine(agent.role) === 'openai'" class="mt-2 grid grid-cols-2 gap-2 pl-4">
+              <!-- BYOK fields — auto-shown for openai engine or when base_url is set -->
+              <div x-show="isAgentAdvanced(agent.role)" class="mt-2 grid grid-cols-2 gap-2 pl-4">
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">Provider</label>
                   <select :value="getAgentField(agent.role, 'provider_type')"
@@ -734,6 +777,11 @@
         <template x-if="anyAgentUsesCopilot()">
           <div class="mb-6">
             <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Copilot Connection</h2>
+            <p class="text-xs text-gray-500 mb-3">
+              Copilot engine uses GitHub Copilot by default. To use a custom provider (z.ai, Azure, etc.),
+              expand <strong class="text-gray-400">Custom Provider (BYOK) ▼</strong> on the agent card and fill in Base URL + API Key.
+              The Copilot SDK will route to your provider instead.
+            </p>
             <div>
               <label class="block text-xs text-gray-400 mb-1">
                 GitHub Token
@@ -784,6 +832,14 @@ function app() {
     activeRun: null,
     currentStage: '',
     liveEvents: [],
+
+    // Agent animation state
+    currentAgent: null,
+    currentAgentLastMsg: '',
+    agentHistory: [],
+    _agentTimerInterval: null,
+    _currentAgentStartAt: null,
+    agentElapsed: 0,
 
     // Submit
     submitDesc: '',
@@ -862,6 +918,7 @@ function app() {
 
     destroy() {
       if (this._prsPollInterval) clearInterval(this._prsPollInterval);
+      if (this._agentTimerInterval) clearInterval(this._agentTimerInterval);
     },
 
     async init() {
@@ -896,12 +953,49 @@ function app() {
 
     handleSseEvent(evt) {
       if (evt.type === 'run_completed') {
+        // Close last agent entry
+        clearInterval(this._agentTimerInterval);
+        this._agentTimerInterval = null;
+        this.agentHistory = this.agentHistory.map(item =>
+          item.endAt === null ? { ...item, endAt: Date.now() } : item
+        );
+        this.currentAgent = null;
+        this.currentAgentLastMsg = '';
         this.loadRuns();
         if (this.activeRun && this.activeRun.id === evt.run_id) {
           this.activeRun.status = evt.status;
         }
         return;
       }
+
+      // Track agent starts
+      if (evt.type === 'agent_started') {
+        // Close previous open entry
+        this.agentHistory = this.agentHistory.map(item =>
+          item.endAt === null ? { ...item, endAt: Date.now() } : item
+        );
+        this.currentAgent = evt.role;
+        this.currentAgentLastMsg = '';
+        this._currentAgentStartAt = Date.now();
+        this.agentElapsed = 0;
+        this.agentHistory = [...this.agentHistory, {
+          role: evt.role,
+          stage: this.currentStage,
+          startAt: this._currentAgentStartAt,
+          endAt: null,
+        }];
+        clearInterval(this._agentTimerInterval);
+        this._agentTimerInterval = setInterval(() => {
+          this.agentElapsed = Math.floor((Date.now() - this._currentAgentStartAt) / 1000);
+        }, 500);
+      }
+
+      // Capture last agent message snippet
+      if (evt.type === 'agent_message' && evt.role === this.currentAgent) {
+        const text = (evt.text || '').trim();
+        if (text) this.currentAgentLastMsg = text.slice(0, 160);
+      }
+
       // Append to live log
       this.liveEvents.push(evt);
       if (this.liveEvents.length > 200) this.liveEvents.shift();
@@ -1254,8 +1348,11 @@ function app() {
     getAgentModel(role) { return this._getAgentCfg(role).model_config.model; },
     setAgentModel(role, val) { this._getAgentCfg(role).model_config.model = val; },
     isAgentAdvanced(role) {
-      // OpenAI engine always shows BYOK fields
-      return !!this._agentAdvanced[role] || this._getAgentCfg(role).engine === 'openai';
+      // Always show BYOK fields if: openai engine, or base_url is already configured, or manually toggled
+      const cfg = this._getAgentCfg(role);
+      return !!this._agentAdvanced[role]
+        || cfg.engine === 'openai'
+        || !!(cfg.model_config && cfg.model_config.base_url);
     },
     toggleAgentAdvanced(role) {
       // Use object spread to trigger Alpine.js v3 reactivity on new keys
@@ -1367,6 +1464,125 @@ function app() {
       try {
         return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
       } catch { return iso; }
+    },
+
+    // ── Agent animation helpers ───────────────────────────────
+    fmtElapsed(secs) {
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    },
+
+    agentLabel(role) {
+      return {
+        'lead-developer': 'Lead Dev',
+        'developer':      'Developer',
+        'code-reviewer':  'Reviewer',
+        'qa-engineer':    'QA',
+        'build-agent':    'Build',
+        'repo-manager':   'Repo Mgr',
+        'PM':             'PM',
+      }[role] || role;
+    },
+
+    agentInitial(role) {
+      return this.agentLabel(role).charAt(0).toUpperCase();
+    },
+
+    roleTextColor(role) {
+      return {
+        'lead-developer': 'text-blue-300',
+        'developer':      'text-cyan-300',
+        'code-reviewer':  'text-yellow-300',
+        'qa-engineer':    'text-green-300',
+        'build-agent':    'text-orange-300',
+        'repo-manager':   'text-pink-300',
+        'PM':             'text-purple-300',
+      }[role] || 'text-gray-300';
+    },
+
+    roleBorderColor(role) {
+      return {
+        'lead-developer': 'border-blue-400',
+        'developer':      'border-cyan-400',
+        'code-reviewer':  'border-yellow-400',
+        'qa-engineer':    'border-green-400',
+        'build-agent':    'border-orange-400',
+        'repo-manager':   'border-pink-400',
+        'PM':             'border-purple-400',
+      }[role] || 'border-gray-400';
+    },
+
+    roleSolidBg(role) {
+      return {
+        'lead-developer': 'bg-blue-600',
+        'developer':      'bg-cyan-600',
+        'code-reviewer':  'bg-yellow-600',
+        'qa-engineer':    'bg-green-600',
+        'build-agent':    'bg-orange-600',
+        'repo-manager':   'bg-pink-600',
+        'PM':             'bg-purple-600',
+      }[role] || 'bg-gray-600';
+    },
+
+    rolePillColor(role) {
+      return {
+        'lead-developer': 'bg-blue-700 text-blue-100',
+        'developer':      'bg-cyan-700 text-cyan-100',
+        'code-reviewer':  'bg-yellow-700 text-yellow-100',
+        'qa-engineer':    'bg-green-700 text-green-100',
+        'build-agent':    'bg-orange-700 text-orange-100',
+        'repo-manager':   'bg-pink-700 text-pink-100',
+        'PM':             'bg-purple-700 text-purple-100',
+      }[role] || 'bg-gray-700 text-gray-100';
+    },
+
+    // Map fine-grained stage labels to 4 major groups for the graph
+    majorStageLabel(stage) {
+      if (!stage) return 'Start';
+      if (/^Stage 1/i.test(stage) || /^Design/i.test(stage))          return 'Design';
+      if (/^Stage 2/i.test(stage) || /^Implementation/i.test(stage))  return 'Implement';
+      if (/^Stage 3/i.test(stage) || /^CI\s/i.test(stage))            return 'Commit & CI';
+      if (/^Stage 4/i.test(stage) || /^PR\s/i.test(stage))            return 'PR Review';
+      return stage;
+    },
+
+    // Build graph from live agentHistory (for active-run banner)
+    liveExecutionGraph() {
+      const map = new Map();
+      const order = [];
+      for (const item of this.agentHistory) {
+        const key = this.majorStageLabel(item.stage);
+        if (!map.has(key)) { map.set(key, []); order.push(key); }
+        map.get(key).push(item);
+      }
+      return order.map(k => ({ label: k, agents: map.get(k) }));
+    },
+
+    // Build graph from runDetail.events (for run detail view)
+    buildExecutionGraph() {
+      const map = new Map();
+      const order = [];
+      let stageName = '';
+      const isLive = this.selectedRun && this.selectedRun.status === 'running';
+      for (const evt of this.runDetail.events) {
+        if (evt.type === 'stage_changed') stageName = evt.stage;
+        if (evt.type === 'agent_started') {
+          const key = this.majorStageLabel(stageName) || 'Start';
+          if (!map.has(key)) { map.set(key, []); order.push(key); }
+          const agents = map.get(key);
+          // Mark previous entry done
+          if (agents.length > 0) agents[agents.length - 1].running = false;
+          agents.push({ role: evt.role, running: false });
+        }
+      }
+      // Mark last node running if pipeline is live
+      if (isLive && order.length > 0) {
+        const lastGroup = map.get(order[order.length - 1]);
+        if (lastGroup && lastGroup.length > 0)
+          lastGroup[lastGroup.length - 1].running = true;
+      }
+      return order.map(k => ({ label: k, agents: map.get(k) }));
     },
   };
 }

@@ -11,6 +11,23 @@
     .scrollbar-thin::-webkit-scrollbar { width: 4px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 9999px; }
+    /* Agent spinner ring */
+    @keyframes agent-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .agent-spin { animation: agent-spin 1.6s linear infinite; }
+    /* Soft glow on active graph nodes */
+    @keyframes node-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.15); }
+      50%       { box-shadow: 0 0 0 4px rgba(255,255,255,0.10); }
+    }
+    .node-glow { animation: node-glow 1.8s ease-in-out infinite; }
+    /* Clamp multiline text */
+    .line-clamp-2 {
+      display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden;
+    }
   </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-mono" x-data="app()" x-init="init()" x-cloak>
@@ -53,20 +70,82 @@
 
           <!-- Active run banner -->
           <template x-if="activeRun && activeRun.status === 'running'">
-            <div class="mb-4 bg-indigo-900/40 border border-indigo-700 rounded-lg p-4">
+            <div class="mb-4 bg-indigo-950/60 border border-indigo-700/60 rounded-xl p-4 space-y-3">
+
+              <!-- Header row -->
               <div class="flex items-center gap-3">
-                <div class="w-3 h-3 rounded-full bg-indigo-400 animate-pulse"></div>
-                <div class="flex-1">
-                  <p class="text-sm font-semibold text-indigo-300">Run in progress</p>
-                  <p class="text-xs text-gray-400 mt-0.5" x-text="activeRun.description"></p>
-                </div>
-                <span class="text-xs text-indigo-400" x-text="currentStage"></span>
+                <div class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse flex-shrink-0"></div>
+                <p class="text-sm font-semibold text-indigo-200 flex-1 truncate" x-text="activeRun.description"></p>
+                <span class="text-xs text-indigo-400 font-mono px-2 py-0.5 bg-indigo-900/50 rounded-full flex-shrink-0" x-text="currentStage"></span>
               </div>
-              <div class="mt-3 bg-gray-900 rounded p-2 h-32 overflow-y-auto scrollbar-thin text-xs space-y-0.5" id="activityLog">
+
+              <!-- Agent card + execution path -->
+              <div class="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-3">
+
+                <!-- Current agent card -->
+                <div class="bg-gray-900/80 rounded-lg p-3 border border-gray-700/40 min-h-[96px] flex flex-col justify-center">
+                  <p class="text-xs text-gray-600 uppercase tracking-widest mb-2">Active Agent</p>
+                  <template x-if="currentAgent">
+                    <div class="space-y-2">
+                      <div class="flex items-center gap-3">
+                        <!-- Spinning dashed ring with initial -->
+                        <div class="relative w-11 h-11 flex-shrink-0">
+                          <div class="absolute inset-0 rounded-full border-2 border-dashed agent-spin" :class="roleBorderColor(currentAgent)"></div>
+                          <div class="absolute inset-1.5 rounded-full flex items-center justify-center" :class="roleSolidBg(currentAgent)">
+                            <span class="text-xs font-bold text-white select-none" x-text="agentInitial(currentAgent)"></span>
+                          </div>
+                        </div>
+                        <div class="min-w-0">
+                          <p class="text-sm font-semibold leading-tight" :class="roleTextColor(currentAgent)" x-text="agentLabel(currentAgent)"></p>
+                          <p class="text-xs text-gray-500 font-mono tabular-nums" x-text="fmtElapsed(agentElapsed)"></p>
+                        </div>
+                      </div>
+                      <template x-if="currentAgentLastMsg">
+                        <p class="text-xs text-gray-500 italic leading-relaxed line-clamp-2" x-text="currentAgentLastMsg"></p>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="!currentAgent">
+                    <p class="text-xs text-gray-700">Initializing…</p>
+                  </template>
+                </div>
+
+                <!-- Execution path graph -->
+                <div class="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30 overflow-hidden">
+                  <p class="text-xs text-gray-600 uppercase tracking-widest mb-2">Execution Path</p>
+                  <div class="flex items-start gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                    <template x-if="liveExecutionGraph().length === 0">
+                      <p class="text-xs text-gray-700 italic self-center">Waiting for first agent…</p>
+                    </template>
+                    <template x-for="(grp, si) in liveExecutionGraph()" :key="si">
+                      <div class="flex items-start gap-1.5 flex-shrink-0">
+                        <div class="flex flex-col items-center gap-1 min-w-[76px]">
+                          <span class="text-xs text-indigo-500 font-medium text-center leading-tight truncate max-w-full px-0.5" x-text="grp.label"></span>
+                          <div class="flex flex-col gap-0.5 items-center">
+                            <template x-for="(agent, ai) in grp.agents" :key="ai">
+                              <div
+                                :class="[rolePillColor(agent.role), (agent.endAt === null) ? 'node-glow ring-1 ring-white/30' : 'opacity-60']"
+                                class="px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap transition-opacity"
+                                x-text="agentLabel(agent.role)">
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+                        <span x-show="si < liveExecutionGraph().length - 1" class="text-gray-700 text-xs self-center mt-4 flex-shrink-0">→</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- Activity log -->
+              <div class="bg-gray-950/80 rounded-lg p-2.5 h-24 overflow-y-auto scrollbar-thin text-xs space-y-0.5" id="activityLog">
                 <template x-for="(evt, i) in liveEvents" :key="i">
                   <div :class="eventColor(evt.type)" x-text="formatEvent(evt)"></div>
                 </template>
               </div>
+
             </div>
           </template>
 
@@ -229,8 +308,10 @@
                     :class="{
                       'border-indigo-500': (_submitAgentCfgs[agent.role] || {}).engine === 'claude' && _submitCardOpen !== agent.role,
                       'border-green-600': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot' && _submitCardOpen !== agent.role,
+                      'border-orange-500': (_submitAgentCfgs[agent.role] || {}).engine === 'openai' && _submitCardOpen !== agent.role,
                       'border-indigo-400 ring-1 ring-indigo-400': _submitCardOpen === agent.role && (_submitAgentCfgs[agent.role] || {}).engine === 'claude',
                       'border-green-400 ring-1 ring-green-400': _submitCardOpen === agent.role && (_submitAgentCfgs[agent.role] || {}).engine === 'copilot',
+                      'border-orange-400 ring-1 ring-orange-400': _submitCardOpen === agent.role && (_submitAgentCfgs[agent.role] || {}).engine === 'openai',
                       'border-gray-700': !(_submitAgentCfgs[agent.role] || {}).engine,
                     }"
                     class="relative bg-gray-800 border rounded-md p-2.5 cursor-pointer transition-all select-none">
@@ -240,6 +321,7 @@
                     <p :class="{
                         'text-indigo-400': (_submitAgentCfgs[agent.role] || {}).engine === 'claude',
                         'text-green-400': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot',
+                        'text-orange-400': (_submitAgentCfgs[agent.role] || {}).engine === 'openai',
                         'text-gray-300': !(_submitAgentCfgs[agent.role] || {}).engine,
                       }"
                       class="text-xs font-semibold pr-4 truncate" x-text="agent.role"></p>
@@ -247,6 +329,7 @@
                     <span :class="{
                         'bg-indigo-900 text-indigo-300': (_submitAgentCfgs[agent.role] || {}).engine === 'claude',
                         'bg-green-900 text-green-300': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot',
+                        'bg-orange-900 text-orange-300': (_submitAgentCfgs[agent.role] || {}).engine === 'openai',
                         'bg-gray-700 text-gray-400': !(_submitAgentCfgs[agent.role] || {}).engine,
                       }"
                       class="inline-block text-xs px-1 py-0.5 rounded mt-1"
@@ -271,6 +354,10 @@
                             @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'copilot'}"
                             :class="(_submitAgentCfgs[agent.role] || {}).engine === 'copilot' ? 'bg-green-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
                             class="flex-1 text-xs py-1 border-l border-gray-700 transition-colors">Copilot</button>
+                            <button
+                              @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'openai', model_config: {...(_submitAgentCfgs[agent.role].model_config||{}), mode:'advanced'}}"
+                              :class="(_submitAgentCfgs[agent.role] || {}).engine === 'openai' ? 'bg-orange-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+                              class="flex-1 text-xs py-1 border-l border-gray-700 transition-colors">OpenAI</button>
                         </div>
                       </div>
 
@@ -285,7 +372,7 @@
                       </div>
 
                       <!-- Mode toggle (Subscription / API BYOK) -->
-                      <div>
+                      <div x-show="(_submitAgentCfgs[agent.role] || {}).engine !== 'openai'">
                         <button
                           @click="const cur = (_submitAgentCfgs[agent.role].model_config || {}).mode; const next = cur === 'advanced' ? 'simple' : 'advanced'; _submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {..._submitAgentCfgs[agent.role].model_config, mode: next} }"
                           class="text-xs text-gray-500 hover:text-gray-300"
@@ -294,7 +381,7 @@
                       </div>
 
                       <!-- API (BYOK) expanded fields -->
-                      <template x-if="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced'">
+                      <template x-if="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' || (_submitAgentCfgs[agent.role] || {}).engine === 'openai'">
                         <div class="space-y-2">
                           <div>
                             <label class="block text-xs text-gray-500 mb-1">Provider</label>
@@ -465,7 +552,9 @@
               <span class="font-semibold text-sm" x-text="agent.role"></span>
               <div class="ml-auto flex items-center gap-1.5">
                 <span
-                  :class="agent.engine === 'copilot'
+                  :class="agent.engine === 'openai'
+                    ? 'bg-orange-900/50 text-orange-400 border-orange-800'
+                    : agent.engine === 'copilot'
                     ? 'bg-green-900/50 text-green-400 border-green-800'
                     : 'bg-indigo-900/50 text-indigo-400 border-indigo-800'"
                   class="text-xs px-1.5 py-0.5 rounded border"
@@ -577,7 +666,7 @@
                   x-text="isAgentAdvanced(agent.role) ? 'Subscription ▲' : 'API (BYOK) ▼'"></button>
               </div>
               <!-- Advanced fields -->
-              <div x-show="isAgentAdvanced(agent.role)" class="mt-2 grid grid-cols-2 gap-2 pl-4">
+              <div x-show="isAgentAdvanced(agent.role) || getAgentEngine(agent.role) === 'openai'" class="mt-2 grid grid-cols-2 gap-2 pl-4">
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">Provider</label>
                   <select :value="getAgentField(agent.role, 'provider_type')"
@@ -1149,11 +1238,14 @@ function app() {
     setAgentEngine(role, engine) {
       const cfg = this._getAgentCfg(role);
       cfg.engine = engine;
-      if (cfg.model_config.mode === 'simple') {
+      if (engine === 'openai') {
+        // OpenAI-compatible engine always requires BYOK — auto-enable advanced mode
+        cfg.model_config.mode = 'advanced';
+        this._agentAdvanced = { ...this._agentAdvanced, [role]: true };
+      } else if (cfg.model_config.mode === 'simple') {
         if (engine === 'copilot') {
           cfg.model_config.model = this._copilotDefaults[role] || '';
         } else {
-          // Look up the per-role Claude tier field (e.g. 'opus_model', 'sonnet_model')
           const tierField = this._claudeDefaultTier[role] || 'sonnet_model';
           cfg.model_config.model = this.settingsForm[tierField] || '';
         }
@@ -1161,7 +1253,10 @@ function app() {
     },
     getAgentModel(role) { return this._getAgentCfg(role).model_config.model; },
     setAgentModel(role, val) { this._getAgentCfg(role).model_config.model = val; },
-    isAgentAdvanced(role) { return !!this._agentAdvanced[role]; },
+    isAgentAdvanced(role) {
+      // OpenAI engine always shows BYOK fields
+      return !!this._agentAdvanced[role] || this._getAgentCfg(role).engine === 'openai';
+    },
     toggleAgentAdvanced(role) {
       // Use object spread to trigger Alpine.js v3 reactivity on new keys
       const next = !this._agentAdvanced[role];

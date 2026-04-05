@@ -31,10 +31,24 @@ class RunManager:
         self.pending_approvals: dict[str, ApprovalGate] = {}
 
     async def setup(self) -> None:
-        """Open DB connection, ensure schema, and load existing runs into memory."""
+        """Open DB connection, ensure schema, and load existing runs into memory.
+
+        Stale ``running`` tasks (from a previous server session that crashed or
+        was restarted) are marked ``failed`` so the UI never shows phantom
+        in-progress runs.  Stale ``queued`` tasks are re-enqueued so they will
+        be picked up by the worker as soon as it starts.
+        """
         await self._db.open()
         for run in await self._db.get_all_runs():
             self._runs[run.id] = run
+            if run.status == RunStatus.RUNNING:
+                run.status = RunStatus.FAILED
+                run.error = "Server restarted while task was in progress"
+                run.completed_at = datetime.now(timezone.utc).isoformat()
+                await self._db.upsert_run(run)
+                await self._db.upsert_run_state(run.id, current_stage="failed")
+            elif run.status == RunStatus.QUEUED:
+                self._queue.put_nowait(run.id)
 
     async def close(self) -> None:
         await self._db.close()

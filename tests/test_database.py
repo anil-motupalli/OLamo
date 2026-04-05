@@ -100,3 +100,59 @@ class TestOLamoDb:
         rows = await db.get_all_runs()
         await db.close()
         assert rows[0].pr_url == "https://github.com/x/y/pull/1"
+
+    @pytest.mark.asyncio
+    async def test_save_and_load_checkpoint(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+
+        data = {"completed_stage": 1, "plan": "some plan", "addressed_ids": [1, 2]}
+        await db.save_checkpoint("r1", data)
+        loaded = await db.load_checkpoint("r1")
+        await db.close()
+
+        assert loaded == data
+
+    @pytest.mark.asyncio
+    async def test_load_checkpoint_returns_none_when_not_set(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+
+        result = await db.load_checkpoint("r1")
+        await db.close()
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_save_checkpoint_overwrites_previous(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+
+        await db.save_checkpoint("r1", {"completed_stage": 1})
+        await db.save_checkpoint("r1", {"completed_stage": 3, "pr_result": "https://github.com/x/y/pull/5"})
+        loaded = await db.load_checkpoint("r1")
+        await db.close()
+
+        assert loaded == {"completed_stage": 3, "pr_result": "https://github.com/x/y/pull/5"}
+
+    @pytest.mark.asyncio
+    async def test_get_run_state_includes_checkpoint_data(self, tmp_path):
+        db = OLamoDb(str(tmp_path / "test.db"))
+        await db.open()
+        run = RunRecord(id="r1", description="test")
+        await db.upsert_run(run)
+        await db.save_checkpoint("r1", {"completed_stage": 2})
+
+        state = await db.get_run_state("r1")
+        await db.close()
+
+        assert state is not None
+        assert "checkpoint_data" in state
+        # checkpoint_data is the raw JSON string stored in the column
+        assert state["checkpoint_data"] is not None

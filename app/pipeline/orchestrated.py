@@ -24,6 +24,8 @@ async def run_pipeline_orchestrated(
     on_event: Callable[[dict], Awaitable[None]],
     pr_url: str = "",
     on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
+    checkpoint: dict | None = None,
+    save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
 ) -> str:
     """Orchestration driven entirely by Python — no PM LLM, deterministic loops."""
 
@@ -101,11 +103,14 @@ async def run_pipeline_orchestrated(
         await on_event({"type": "stage_changed", "stage": label})
 
     try:
-        plan = task        # used in reviewer prompts; overwritten in Stage 1 unless skipping
-        last_diff = ""
-        pr_result = pr_url  # overwritten in Stage 3 unless pr_url was provided
+        completed_stage = (checkpoint or {}).get("completed_stage", 0)
 
-        if not pr_url:
+        plan = (checkpoint or {}).get("plan", task)
+        last_diff = (checkpoint or {}).get("last_diff", "")
+        pr_result = (checkpoint or {}).get("pr_result", pr_url)
+        addressed_ids = list((checkpoint or {}).get("addressed_ids", []))
+
+        if not pr_url and completed_stage < 1:
             # ── Stage 1: Design Loop ──────────────────────────────────────────────────
             await stage("Stage 1")
             plan = await call("lead-developer", task)
@@ -146,6 +151,17 @@ async def run_pipeline_orchestrated(
                             f"Feedback:\n{feedback}{comment_text}",
                         )
 
+            if save_checkpoint:
+                await save_checkpoint({
+                    "completed_stage": 1,
+                    "plan": plan,
+                    "last_diff": last_diff,
+                    "pr_result": pr_result,
+                    "addressed_ids": addressed_ids,
+                    "already_approved": [],
+                })
+
+        if not pr_url and completed_stage < 3:
             # ── Stage 2: Implementation Loop ─────────────────────────────────────────
             await stage("Stage 2")
             findings = ""
@@ -209,6 +225,17 @@ async def run_pipeline_orchestrated(
                 findings = "\n\n---\n\n".join(
                     r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper()
                 )
+
+                if save_checkpoint:
+                    await save_checkpoint({
+                        "completed_stage": 1,
+                        "plan": plan,
+                        "last_diff": last_diff,
+                        "pr_result": pr_result,
+                        "addressed_ids": addressed_ids,
+                        "already_approved": list(already_approved),
+                    })
+
                 if not findings:
                     break
 
@@ -221,6 +248,20 @@ async def run_pipeline_orchestrated(
                 f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.",
             )
             last_diff = pr_result
+
+            if save_checkpoint:
+                await save_checkpoint({
+                    "completed_stage": 3,
+                    "plan": plan,
+                    "last_diff": last_diff,
+                    "pr_result": pr_result,
+                    "addressed_ids": addressed_ids,
+                    "already_approved": [],
+                })
+
+        elif not pr_url and completed_stage >= 3:
+            await on_event({"type": "agent_message", "role": "orchestrator",
+                            "text": f"Resuming from Stage 3b (Stage 1-3 already completed). PR: {pr_result[:100]}"})
 
         # ── Stage 3b: CI Check Polling ────────────────────────────────────────────
         for ci_cycle in range(settings.max_pr_cycles):
@@ -240,7 +281,6 @@ async def run_pipeline_orchestrated(
 
         # ── Stage 4: PR Poll Loop ─────────────────────────────────────────────────
         await stage("Stage 4")
-        addressed_ids: list[str] = []
 
         for pr_cycle in range(settings.max_pr_cycles):
             await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}")
@@ -277,6 +317,16 @@ async def run_pipeline_orchestrated(
                     await call("build-agent", "Build and test the project.")
 
             last_diff = await call("repo-manager", "PUSH CHANGES")
+
+            if save_checkpoint:
+                await save_checkpoint({
+                    "completed_stage": 3,
+                    "plan": plan,
+                    "last_diff": last_diff,
+                    "pr_result": pr_result,
+                    "addressed_ids": addressed_ids,
+                    "already_approved": [],
+                })
 
         return f"Pipeline complete. PR: {pr_result[:200]}"
     finally:

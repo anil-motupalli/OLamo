@@ -70,11 +70,12 @@ class OLamoDb:
             CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, seq);
 
             CREATE TABLE IF NOT EXISTS run_state (
-                run_id        TEXT PRIMARY KEY,
-                current_stage TEXT,
-                current_cycle TEXT,
-                last_agent    TEXT,
-                updated_at    TEXT,
+                run_id          TEXT PRIMARY KEY,
+                current_stage   TEXT,
+                current_cycle   TEXT,
+                last_agent      TEXT,
+                checkpoint_data TEXT,
+                updated_at      TEXT,
                 FOREIGN KEY (run_id) REFERENCES runs(id)
             );
         """)
@@ -85,6 +86,10 @@ class OLamoDb:
             pass  # column already exists
         try:
             await self._conn.execute("ALTER TABLE run_state ADD COLUMN last_agent TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            await self._conn.execute("ALTER TABLE run_state ADD COLUMN checkpoint_data TEXT")
         except Exception:
             pass  # column already exists
         await self._conn.commit()
@@ -169,7 +174,7 @@ class OLamoDb:
 
     async def get_run_state(self, run_id: str) -> dict | None:
         async with self._conn.execute(
-            "SELECT run_id, current_stage, current_cycle, last_agent, updated_at FROM run_state WHERE run_id=?",
+            "SELECT run_id, current_stage, current_cycle, last_agent, checkpoint_data, updated_at FROM run_state WHERE run_id=?",
             (run_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -180,5 +185,31 @@ class OLamoDb:
             "current_stage": row["current_stage"],
             "current_cycle": row["current_cycle"],
             "last_agent": row["last_agent"],
+            "checkpoint_data": row["checkpoint_data"],
             "updated_at": row["updated_at"],
         }
+
+    async def save_checkpoint(self, run_id: str, data: dict) -> None:
+        """Persist pipeline checkpoint data (plan, pr_result, stage, etc.)."""
+        ts = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            """
+            INSERT INTO run_state (run_id, checkpoint_data, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                checkpoint_data = excluded.checkpoint_data,
+                updated_at      = excluded.updated_at
+            """,
+            (run_id, json.dumps(data), ts),
+        )
+        await self._conn.commit()
+
+    async def load_checkpoint(self, run_id: str) -> dict | None:
+        """Load persisted checkpoint data, or None if not present."""
+        async with self._conn.execute(
+            "SELECT checkpoint_data FROM run_state WHERE run_id=?", (run_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None or not row["checkpoint_data"]:
+            return None
+        return json.loads(row["checkpoint_data"])

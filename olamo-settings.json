@@ -11,9 +11,9 @@
   "orchestration_mode": "orchestrated",
   "agent_configs": {
     "lead-developer": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
-        "mode": "chat",
+        "mode": "advanced",
         "model": "glm-5v-turbo",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
@@ -23,9 +23,9 @@
       "mcp_servers": {}
     },
     "developer": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
-        "mode": "chat",
+        "mode": "advanced",
         "model": "glm-5.1",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
@@ -35,7 +35,7 @@
       "mcp_servers": {}
     },
     "code-reviewer": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
         "mode": "chat",
         "model": "glm-5.1",
@@ -47,7 +47,7 @@
       "mcp_servers": {}
     },
     "qa-engineer": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
         "mode": "chat",
         "model": "glm-5.1",
@@ -59,7 +59,7 @@
       "mcp_servers": {}
     },
     "build-agent": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
         "mode": "chat",
         "model": "glm-5",
@@ -71,7 +71,7 @@
       "mcp_servers": {}
     },
     "repo-manager": {
-      "engine": "openai",
+      "engine": "copilot",
       "model_config": {
         "mode": "chat",
         "model": "glm-5",

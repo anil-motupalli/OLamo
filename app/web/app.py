@@ -52,10 +52,24 @@ def create_app(settings_file: Path | None = None):  # noqa: ANN201
         return FileResponse(static_dir / "index.html")
 
     @app.get("/api/events")
-    async def sse_stream() -> EventSourceResponse:
+    async def sse_stream(request: Request) -> EventSourceResponse:
+        """SSE stream for live pipeline events.
+
+        Supports Last-Event-ID header: if the client provides a seq, all
+        stored events since that seq are replayed immediately before the
+        live stream begins (OLaCo-style gap-fill on reconnect).
+        """
+        last_event_id = request.headers.get("last-event-id", "")
         cid, q = await broadcaster.connect()
 
         async def generator():
+            # Gap-fill: replay any persisted events the client missed
+            if last_event_id and last_event_id.isdigit():
+                after_seq = int(last_event_id)
+                missed = await manager._db.get_events_since_global(after_seq)
+                for evt in missed:
+                    import json as _json
+                    yield {"id": str(evt.get("seq", "")), "data": _json.dumps(evt)}
             try:
                 while True:
                     data = await q.get()
@@ -131,6 +145,32 @@ def create_app(settings_file: Path | None = None):  # noqa: ANN201
             raise HTTPException(status_code=404, detail="run not found")
         return await manager.get_run_events(run_id)
 
+    @app.get("/api/runs/{run_id}/events/{seq}/content")
+    async def run_event_content(run_id: str, seq: int):
+        from fastapi.responses import PlainTextResponse
+        if manager.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        content_path = await manager.get_event_content_path(run_id, seq)
+        if not content_path:
+            raise HTTPException(status_code=404, detail="no content for this event")
+        p = Path(content_path)
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="content file not found")
+        return PlainTextResponse(p.read_text(encoding="utf-8"))
+
+    @app.get("/api/runs/{run_id}/agents/{role}/log")
+    async def agent_log(run_id: str, role: str):
+        from fastapi.responses import PlainTextResponse
+        run = manager.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if not run.log_dir:
+            raise HTTPException(status_code=404, detail="no log directory for this run")
+        log_path = Path(run.log_dir) / f"{role}.log"
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail=f"no log for agent '{role}'")
+        return PlainTextResponse(log_path.read_text(encoding="utf-8"))
+
     @app.get("/api/runs/{run_id}/state")
     async def get_run_state(run_id: str) -> dict:
         if manager.get_run(run_id) is None:
@@ -182,6 +222,8 @@ def create_app(settings_file: Path | None = None):  # noqa: ANN201
 
     @app.put("/api/settings")
     async def update_settings(request: Request) -> dict:
+        if store.is_locked:
+            raise HTTPException(status_code=409, detail="Settings are locked while a run is active")
         body = await request.json()
         try:
             current = asdict(store.settings)

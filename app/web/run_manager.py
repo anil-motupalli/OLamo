@@ -85,6 +85,8 @@ class RunManager:
         )
         self._runs[run.id] = run
         await self._db.upsert_run(run)
+        await self._db.insert_event(run.id, {"type": "run_queued", "run_id": run.id, "description": description})
+        await self._broadcaster.broadcast({"type": "run_queued", "run_id": run.id, "description": description})
         self._spawn(run)
         return run
 
@@ -104,6 +106,9 @@ class RunManager:
     async def get_run_state(self, run_id: str) -> dict | None:
         return await self._db.get_run_state(run_id)
 
+    async def get_event_content_path(self, run_id: str, seq: int) -> str | None:
+        return await self._db.get_event_content_path(run_id, seq)
+
     @property
     def all_runs(self) -> list[RunRecord]:
         return sorted(self._runs.values(), key=lambda r: r.queued_at, reverse=True)
@@ -122,6 +127,11 @@ class RunManager:
         run.log_dir = str(log_dir)
         await self._db.upsert_run(run)
         await self._db.upsert_run_state(run.id, current_stage="running")
+        await self._store.lock()
+
+        started_evt = {"type": "run_started", "run_id": run.id}
+        await self._broadcaster.broadcast(started_evt)
+        await self._db.insert_event(run.id, started_evt)
 
         # Apply per-run settings override on top of global settings
         base = self._store.settings
@@ -147,17 +157,45 @@ class RunManager:
 
         async def on_event(evt: dict) -> None:
             await self._broadcaster.broadcast(evt)
-            await self._db.insert_event(run.id, evt)
-            if evt.get("type") == "stage_changed":
+            seq = await self._db.insert_event(run.id, evt)
+            evt_type = evt.get("type")
+            if evt_type == "stage_changed":
                 stage = evt["stage"]
                 cycle_info = _parse_stage_announcement(stage)
                 await self._db.upsert_run_state(run.id, current_stage=stage, current_cycle=cycle_info)
-            elif evt.get("type") == "agent_started":
+            elif evt_type == "agent_started":
                 await self._db.upsert_run_state(run.id, last_agent=evt.get("role"))
+            elif evt_type == "agent_completed":
+                await self._db.upsert_run_state(
+                    run.id,
+                    last_agent=evt.get("role"),
+                    last_agent_ok=evt.get("success"),
+                    last_summary=evt.get("summary"),
+                )
+            # Attach seq back onto the event so listeners can use it (e.g. for content fetch)
+            evt["seq"] = seq
 
-        async def on_approval_required(plan: str) -> dict:
-            await self._broadcaster.broadcast({"type": "approval_required", "run_id": run.id, "plan": plan})
-            return await gate.wait(plan)
+        async def on_approval_required(spec: str) -> dict:
+            # Store spec content to disk so the UI can fetch it
+            spec_seq_placeholder = {"type": "awaiting_approval", "run_id": run.id}
+            content_dir = log_dir / "content"
+            content_dir.mkdir(parents=True, exist_ok=True)
+            # We broadcast first to get a seq, then update content_path
+            spec_summary = spec[:300].rstrip()
+            evt = {
+                "type": "awaiting_approval",
+                "run_id": run.id,
+                "specSummary": spec_summary,
+                "developerResponse": "",
+            }
+            await self._broadcaster.broadcast(evt)
+            seq = await self._db.insert_event(run.id, evt)
+            spec_path = content_dir / f"spec-{seq}.md"
+            spec_path.write_text(spec, encoding="utf-8")
+            # Update the DB row to record the content_path
+            await self._db.update_event_content_path(run_id=run.id, seq=seq, content_path=str(spec_path))
+            # Tell the gate to wait
+            return await gate.wait(spec)
 
         async def save_ckpt(data: dict) -> None:
             await self._db.save_checkpoint(run.id, data)
@@ -169,22 +207,24 @@ class RunManager:
                 on_approval_required=on_approval_required,
                 checkpoint=checkpoint,
                 save_checkpoint=save_ckpt,
+                log_dir=str(log_dir),
             )
             run.status = RunStatus.COMPLETED
             run.completed_at = datetime.now(timezone.utc).isoformat()
             await self._db.upsert_run(run)
             await self._db.upsert_run_state(run.id, current_stage="completed")
-            await self._broadcaster.broadcast(
-                {"type": "run_completed", "run_id": run.id, "status": RunStatus.COMPLETED, "result": result[:500]}
-            )
+            completed_evt = {"type": "run_completed", "run_id": run.id, "status": "completed", "result": result[:500]}
+            await self._broadcaster.broadcast(completed_evt)
+            await self._db.insert_event(run.id, completed_evt)
         except Exception as e:
             run.status = RunStatus.FAILED
             run.completed_at = datetime.now(timezone.utc).isoformat()
             run.error = str(e)
             await self._db.upsert_run(run)
             await self._db.upsert_run_state(run.id, current_stage="failed")
-            await self._broadcaster.broadcast(
-                {"type": "run_completed", "run_id": run.id, "status": RunStatus.FAILED, "error": str(e)}
-            )
+            failed_evt = {"type": "run_completed", "run_id": run.id, "status": "failed", "error": str(e)}
+            await self._broadcaster.broadcast(failed_evt)
+            await self._db.insert_event(run.id, failed_evt)
         finally:
             self.pending_approvals.pop(run.id, None)
+            await self._store.unlock()

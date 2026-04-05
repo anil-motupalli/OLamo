@@ -137,11 +137,13 @@ class TestApiRuns:
         resp = client.get("/api/runs/nonexistent-id")
         assert resp.status_code == 404
 
-    def test_run_events_empty_for_new_run(self, client):
+    def test_run_events_includes_queued_event(self, client):
         created = client.post("/api/runs", json={"description": "no events yet"}).json()
         resp = client.get(f"/api/runs/{created['id']}/events")
         assert resp.status_code == 200
-        assert resp.json() == []
+        events = resp.json()
+        # A run_queued event is emitted when the run is enqueued
+        assert any(e["type"] == "run_queued" for e in events)
 
     def test_run_events_unknown_run_returns_404(self, client):
         resp = client.get("/api/runs/bad-id/events")

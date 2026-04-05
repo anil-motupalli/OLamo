@@ -6,47 +6,71 @@
   <title>OLamo — AI Dev Pipeline</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <style>
     [x-cloak] { display: none !important; }
     .scrollbar-thin::-webkit-scrollbar { width: 4px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 9999px; }
-    /* Agent spinner ring */
-    @keyframes agent-spin {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
+    @keyframes agent-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .agent-spin { animation: agent-spin 1.6s linear infinite; }
-    /* Soft glow on active graph nodes */
-    @keyframes node-glow {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.15); }
-      50%       { box-shadow: 0 0 0 4px rgba(255,255,255,0.10); }
-    }
+    @keyframes pulse-ring { 0% { transform: scale(0.9); opacity: 0.8; } 50% { transform: scale(1.35); opacity: 0.2; } 100% { transform: scale(0.9); opacity: 0.8; } }
+    .pulse-ring { animation: pulse-ring 2s ease-in-out infinite; }
+    @keyframes pulse-ring-slow { 0% { transform: scale(0.95); opacity: 0.5; } 50% { transform: scale(1.5); opacity: 0.05; } 100% { transform: scale(0.95); opacity: 0.5; } }
+    .pulse-ring-slow { animation: pulse-ring-slow 3s ease-in-out infinite; }
+    @keyframes node-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.3), 0 0 8px 2px rgba(99,102,241,0.15); } 50% { box-shadow: 0 0 0 5px rgba(99,102,241,0.15), 0 0 16px 4px rgba(99,102,241,0.10); } }
     .node-glow { animation: node-glow 1.8s ease-in-out infinite; }
-    /* Clamp multiline text */
-    .line-clamp-2 {
-      display: -webkit-box; -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical; overflow: hidden;
-    }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    .shimmer { background: linear-gradient(105deg, transparent 20%, rgba(99,102,241,0.04) 40%, rgba(99,102,241,0.08) 50%, rgba(99,102,241,0.04) 60%, transparent 80%); background-size: 200% 100%; animation: shimmer 3s ease-in-out infinite; }
+    @keyframes thinking-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.3; } 30% { transform: translateY(-5px); opacity: 1; } }
+    .thinking-dot-1 { animation: thinking-dot 1.4s ease-in-out infinite 0s; }
+    .thinking-dot-2 { animation: thinking-dot 1.4s ease-in-out infinite 0.2s; }
+    .thinking-dot-3 { animation: thinking-dot 1.4s ease-in-out infinite 0.4s; }
+    @keyframes path-flow { to { stroke-dashoffset: -20; } }
+    .path-animated { stroke-dasharray: 6 6; animation: path-flow 0.8s linear infinite; }
+    @keyframes check-pop { 0% { transform: scale(0) rotate(-45deg); opacity: 0; } 60% { transform: scale(1.2) rotate(0deg); opacity: 1; } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+    .check-pop { animation: check-pop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+    @keyframes fade-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .node-enter { animation: fade-slide-up 0.4s ease-out forwards; }
+    @keyframes progress-glow { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.3); } }
+    .progress-glow { animation: progress-glow 2s ease-in-out infinite; }
+    @keyframes stage-pulse { 0%, 100% { border-color: rgba(99,102,241,0.4); } 50% { border-color: rgba(99,102,241,0.8); } }
+    .stage-active { animation: stage-pulse 2s ease-in-out infinite; }
+    @keyframes gentle-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+    .gentle-float { animation: gentle-float 3s ease-in-out infinite; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .spec-content h1 { font-size:1.5rem; font-weight:700; color:#e5e7eb; margin:1.5rem 0 .75rem; border-bottom:1px solid #374151; padding-bottom:.5rem; }
+    .spec-content h2 { font-size:1.25rem; font-weight:600; color:#d1d5db; margin:1.25rem 0 .5rem; }
+    .spec-content h3 { font-size:1rem; font-weight:600; color:#d1d5db; margin:1rem 0 .375rem; }
+    .spec-content p { margin-bottom:.75rem; line-height:1.7; }
+    .spec-content ul, .spec-content ol { margin:.5rem 0 .75rem 1.5rem; }
+    .spec-content li { margin-bottom:.25rem; }
+    .spec-content code { background:#1f2937; color:#93c5fd; padding:.1rem .3rem; border-radius:.25rem; font-size:.8rem; font-family:monospace; }
+    .spec-content pre { background:#111827; border:1px solid #374151; border-radius:.5rem; padding:1rem; overflow-x:auto; margin:.75rem 0; }
+    .spec-content pre code { background:none; padding:0; color:#86efac; }
+    .spec-content blockquote { border-left:3px solid #4b5563; padding-left:1rem; color:#9ca3af; margin:.75rem 0; }
+    .spec-content a { color:#818cf8; text-decoration:underline; }
+    .spec-content table { width:100%; border-collapse:collapse; margin:.75rem 0; }
+    .spec-content th { background:#1f2937; padding:.5rem .75rem; text-align:left; border:1px solid #374151; color:#d1d5db; }
+    .spec-content td { padding:.5rem .75rem; border:1px solid #374151; }
+    .spec-content hr { border:none; border-top:1px solid #374151; margin:1.25rem 0; }
   </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-mono" x-data="app()" x-init="init()" x-cloak>
 
   <!-- Nav -->
-  <nav class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+  <nav class="bg-gray-900 border-b border-gray-800 sticky top-0 z-40">
     <div class="max-w-7xl mx-auto px-4 flex items-center gap-1 h-14">
       <span class="text-indigo-400 font-bold text-lg mr-6">OLamo</span>
       <template x-for="tab in tabs" :key="tab.id">
         <button
           @click="view = tab.id; onViewChange(tab.id)"
-          :class="view === tab.id
-            ? 'bg-indigo-600 text-white'
-            : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+          :class="view === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
           class="px-3 py-1.5 rounded text-sm transition-colors"
           x-text="tab.label">
         </button>
       </template>
-      <!-- SSE status dot -->
       <div class="ml-auto flex items-center gap-2 text-xs text-gray-500">
         <div :class="sseConnected ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></div>
         <span x-text="sseConnected ? 'live' : 'offline'"></span>
@@ -55,97 +79,151 @@
   </nav>
 
   <main class="max-w-7xl mx-auto px-4 py-6">
-
     <!-- ── DASHBOARD ─────────────────────────────────────────── -->
     <div x-show="view === 'dashboard'">
       <div class="flex items-center justify-between mb-4">
         <h1 class="text-xl font-bold">Dashboard</h1>
         <button @click="loadRuns()" class="text-xs text-gray-400 hover:text-white">↻ Refresh</button>
       </div>
-
       <div class="flex gap-6 items-start">
-
-        <!-- Left column: runs content -->
+        <!-- Left column -->
         <div class="flex-1 min-w-0">
-
           <!-- Active run banner -->
           <template x-if="activeRun && activeRun.status === 'running'">
             <div class="mb-4 bg-indigo-950/60 border border-indigo-700/60 rounded-xl p-4 space-y-3">
-
-              <!-- Header row -->
               <div class="flex items-center gap-3">
                 <div class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse flex-shrink-0"></div>
                 <p class="text-sm font-semibold text-indigo-200 flex-1 truncate" x-text="activeRun.description"></p>
                 <span class="text-xs text-indigo-400 font-mono px-2 py-0.5 bg-indigo-900/50 rounded-full flex-shrink-0" x-text="currentStage"></span>
               </div>
-
-              <!-- Agent card + execution path -->
               <div class="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-3">
-
                 <!-- Current agent card -->
-                <div class="bg-gray-900/80 rounded-lg p-3 border border-gray-700/40 min-h-[96px] flex flex-col justify-center">
-                  <p class="text-xs text-gray-600 uppercase tracking-widest mb-2">Active Agent</p>
+                <div class="bg-gray-900/80 rounded-lg p-3 border border-indigo-700/40 min-h-[120px] flex flex-col justify-center shimmer gentle-float relative overflow-hidden">
+                  <div class="absolute inset-0 bg-gradient-to-b from-indigo-900/10 to-transparent pointer-events-none"></div>
+                  <p class="text-xs text-indigo-400/70 uppercase tracking-widest mb-2 relative z-10">Active Agent</p>
                   <template x-if="currentAgent">
-                    <div class="space-y-2">
+                    <div class="space-y-2 relative z-10">
                       <div class="flex items-center gap-3">
-                        <!-- Spinning dashed ring with initial -->
-                        <div class="relative w-11 h-11 flex-shrink-0">
+                        <div class="relative w-14 h-14 flex-shrink-0">
                           <div class="absolute inset-0 rounded-full border-2 border-dashed agent-spin" :class="roleBorderColor(currentAgent)"></div>
-                          <div class="absolute inset-1.5 rounded-full flex items-center justify-center" :class="roleSolidBg(currentAgent)">
-                            <span class="text-xs font-bold text-white select-none" x-text="agentInitial(currentAgent)"></span>
+                          <div class="absolute inset-0.5 rounded-full ring-2 pulse-ring" :class="'ring-' + (currentAgent === 'lead-developer' ? 'blue' : currentAgent === 'developer' ? 'cyan' : currentAgent === 'code-reviewer' ? 'yellow' : currentAgent === 'qa-engineer' ? 'green' : currentAgent === 'build-agent' ? 'orange' : currentAgent === 'repo-manager' ? 'pink' : 'purple') + '-400/30'"></div>
+                          <div class="absolute inset-1 rounded-full ring-1 pulse-ring-slow" :class="'ring-' + (currentAgent === 'lead-developer' ? 'blue' : currentAgent === 'developer' ? 'cyan' : currentAgent === 'code-reviewer' ? 'yellow' : currentAgent === 'qa-engineer' ? 'green' : currentAgent === 'build-agent' ? 'orange' : currentAgent === 'repo-manager' ? 'pink' : 'purple') + '-400/15'"></div>
+                          <div class="absolute inset-2 rounded-full flex items-center justify-center shadow-lg" :class="roleSolidBg(currentAgent)">
+                            <span class="text-sm font-bold text-white select-none drop-shadow" x-text="agentInitial(currentAgent)"></span>
                           </div>
                         </div>
-                        <div class="min-w-0">
-                          <p class="text-sm font-semibold leading-tight" :class="roleTextColor(currentAgent)" x-text="agentLabel(currentAgent)"></p>
-                          <p class="text-xs text-gray-500 font-mono tabular-nums" x-text="fmtElapsed(agentElapsed)"></p>
+                        <div class="min-w-0 flex-1">
+                          <div class="flex items-center gap-2">
+                            <p class="text-sm font-semibold leading-tight" :class="roleTextColor(currentAgent)" x-text="agentLabel(currentAgent)"></p>
+                            <template x-if="!currentAgentLastMsg">
+                              <span class="flex gap-0.5 ml-1">
+                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-1"></span>
+                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-2"></span>
+                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-3"></span>
+                              </span>
+                            </template>
+                          </div>
+                          <div class="flex items-center gap-2 mt-0.5">
+                            <div class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
+                            <p class="text-xs text-gray-400 font-mono tabular-nums" x-text="fmtElapsed(agentElapsed)"></p>
+                          </div>
                         </div>
                       </div>
                       <template x-if="currentAgentLastMsg">
-                        <p class="text-xs text-gray-500 italic leading-relaxed line-clamp-2" x-text="currentAgentLastMsg"></p>
+                        <div class="mt-1 pl-[68px]">
+                          <p class="text-xs text-gray-400 italic leading-relaxed line-clamp-2 border-l-2 border-gray-700/50 pl-2" x-text="currentAgentLastMsg"></p>
+                        </div>
+                      </template>
+                      <template x-if="!currentAgentLastMsg">
+                        <div class="mt-1 pl-[68px]"><p class="text-xs text-gray-600 italic animate-pulse">Processing task…</p></div>
                       </template>
                     </div>
                   </template>
                   <template x-if="!currentAgent">
-                    <p class="text-xs text-gray-700">Initializing…</p>
+                    <div class="flex items-center gap-2 text-gray-700 relative z-10">
+                      <div class="w-2 h-2 rounded-full bg-gray-600 animate-pulse"></div>
+                      <p class="text-xs">Initializing pipeline…</p>
+                    </div>
                   </template>
                 </div>
-
                 <!-- Execution path graph -->
-                <div class="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30 overflow-hidden">
-                  <p class="text-xs text-gray-600 uppercase tracking-widest mb-2">Execution Path</p>
-                  <div class="flex items-start gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                <div class="bg-gray-900/60 rounded-lg p-3 border border-gray-700/30 overflow-hidden relative">
+                  <template x-if="liveExecutionGraph().length > 0">
+                    <div class="absolute top-0 left-0 right-0 h-[2px] bg-gray-800 overflow-hidden">
+                      <div class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 progress-glow transition-all duration-1000"
+                        :style="'width:' + Math.round((completedAgentCount() / Math.max(totalAgentCount(),1)) * 100) + '%'"></div>
+                    </div>
+                  </template>
+                  <p class="text-xs text-gray-600 uppercase tracking-widest mb-3 mt-1">Execution Path</p>
+                  <div class="flex items-start gap-1 overflow-x-auto pb-2 scrollbar-thin">
                     <template x-if="liveExecutionGraph().length === 0">
-                      <p class="text-xs text-gray-700 italic self-center">Waiting for first agent…</p>
+                      <div class="flex items-center gap-2 self-center w-full justify-center py-4">
+                        <div class="w-1.5 h-1.5 rounded-full bg-gray-700 animate-pulse"></div>
+                        <p class="text-xs text-gray-700 italic">Waiting for first agent…</p>
+                      </div>
                     </template>
                     <template x-for="(grp, si) in liveExecutionGraph()" :key="si">
-                      <div class="flex items-start gap-1.5 flex-shrink-0">
-                        <div class="flex flex-col items-center gap-1 min-w-[76px]">
-                          <span class="text-xs text-indigo-500 font-medium text-center leading-tight truncate max-w-full px-0.5" x-text="grp.label"></span>
-                          <div class="flex flex-col gap-0.5 items-center">
+                      <div class="flex items-stretch gap-0 flex-shrink-0 node-enter" :style="'animation-delay:' + (si * 80) + 'ms'">
+                        <div class="flex flex-col items-center min-w-[88px]">
+                          <div :class="grp.agents.some(a => a.endAt === null) ? 'bg-indigo-900/50 border-indigo-600/60 stage-active text-indigo-300' : grp.agents.every(a => a.endAt !== null) ? 'bg-gray-800/60 border-gray-600/40 text-gray-400' : 'bg-gray-900/40 border-gray-800/30 text-gray-500'"
+                            class="text-[10px] font-semibold mb-2 px-2 py-0.5 rounded-full border text-center leading-tight max-w-full truncate">
+                            <template x-if="grp.agents.every(a => a.endAt !== null)">
+                              <span class="inline-flex items-center gap-1"><svg class="w-2.5 h-2.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg><span x-text="grp.label"></span></span>
+                            </template>
+                            <template x-if="!grp.agents.every(a => a.endAt !== null)"><span x-text="grp.label"></span></template>
+                          </div>
+                          <div class="flex flex-col items-center gap-1">
                             <template x-for="(agent, ai) in grp.agents" :key="ai">
-                              <div
-                                :class="[rolePillColor(agent.role), (agent.endAt === null) ? 'node-glow ring-1 ring-white/30' : 'opacity-60']"
-                                class="px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap transition-opacity"
-                                x-text="agentLabel(agent.role)">
+                              <div class="relative flex flex-col items-center node-enter" :style="'animation-delay:' + (si * 80 + ai * 60) + 'ms'">
+                                <div x-show="agent.endAt === null" class="absolute inset-0 rounded-md bg-gradient-to-r from-indigo-500/10 to-purple-500/10 blur-sm -m-0.5"></div>
+                                <div :class="[rolePillColor(agent.role), agent.endAt === null ? 'node-glow ring-1 ring-white/30 shadow-lg scale-105 z-10' : 'opacity-50 scale-95']"
+                                  class="relative px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-all duration-500"
+                                  x-text="agentLabel(agent.role)"></div>
+                                <div x-show="agent.endAt !== null" class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-500/90 flex items-center justify-center check-pop z-20">
+                                  <svg class="w-[7px] h-[7px] text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="4"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                                </div>
+                                <template x-if="agent.endAt && agent.startAt">
+                                  <span class="text-[9px] text-gray-600 font-mono -mt-0.5" x-text="fmtShortDuration(agent.endAt - agent.startAt)"></span>
+                                </template>
+                                <template x-if="agent.endAt === null">
+                                  <div class="flex items-center gap-1 mt-0.5">
+                                    <div class="w-1 h-1 rounded-full bg-indigo-400 animate-pulse"></div>
+                                    <span class="text-[9px] text-indigo-400 font-mono" x-text="fmtElapsed(agentElapsed)"></span>
+                                  </div>
+                                </template>
+                                <template x-if="ai < grp.agents.length - 1">
+                                  <div class="w-px h-2 bg-gradient-to-b from-gray-600 to-gray-700"></div>
+                                </template>
                               </div>
                             </template>
                           </div>
                         </div>
-                        <span x-show="si < liveExecutionGraph().length - 1" class="text-gray-700 text-xs self-center mt-4 flex-shrink-0">→</span>
+                        <template x-if="si < liveExecutionGraph().length - 1">
+                          <div class="flex items-center self-center px-0.5 mt-6 flex-shrink-0">
+                            <svg width="20" height="16" class="overflow-visible">
+                              <line x1="0" y1="8" x2="16" y2="8" :stroke="liveExecutionGraph()[si+1]?.agents?.some(a=>a.endAt===null)?'#6366f1':'#374151'" stroke-width="1.5" stroke-dasharray="4 3" class="path-animated" stroke-linecap="round"/>
+                              <polyline points="14,4 19,8 14,12" :fill="liveExecutionGraph()[si+1]?.agents?.some(a=>a.endAt===null)?'#6366f1':'#374151'" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                          </div>
+                        </template>
                       </div>
                     </template>
                   </div>
+                  <template x-if="liveExecutionGraph().length > 0">
+                    <div class="flex items-center gap-4 mt-2 pt-2 border-t border-gray-800/50 text-[10px] text-gray-500">
+                      <span><span class="text-green-400 font-semibold" x-text="completedAgentCount()"></span> done</span>
+                      <span><span class="text-indigo-400 font-semibold" x-text="runningAgentCount()"></span> running</span>
+                      <span class="ml-auto text-gray-600 font-mono" x-text="fmtElapsed(runElapsed)"></span>
+                    </div>
+                  </template>
                 </div>
-
               </div>
-
-              <!-- Activity log -->
-              <div class="bg-gray-950/80 rounded-lg p-2.5 h-24 overflow-y-auto scrollbar-thin text-xs space-y-0.5" id="activityLog">
+              <!-- Live activity log -->
+              <div class="bg-gray-950/80 rounded-lg p-2.5 h-24 overflow-y-auto scrollbar-thin text-xs space-y-0.5">
                 <template x-for="(evt, i) in liveEvents" :key="i">
                   <div :class="eventColor(evt.type)" x-text="formatEvent(evt)"></div>
                 </template>
               </div>
-
             </div>
           </template>
 
@@ -163,15 +241,11 @@
               </thead>
               <tbody>
                 <template x-if="runs.length === 0">
-                  <tr>
-                    <td colspan="5" class="text-center py-12 text-gray-600">No runs yet. Submit a task to get started.</td>
-                  </tr>
+                  <tr><td colspan="5" class="text-center py-12 text-gray-600">No runs yet. Submit a task to get started.</td></tr>
                 </template>
                 <template x-for="run in runs" :key="run.id">
                   <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                    <td class="px-4 py-3">
-                      <span :class="statusBadge(run.status)" class="px-2 py-0.5 rounded text-xs font-semibold" x-text="run.status"></span>
-                    </td>
+                    <td class="px-4 py-3"><span :class="statusBadge(run.status)" class="px-2 py-0.5 rounded text-xs font-semibold" x-text="run.status"></span></td>
                     <td class="px-4 py-3 text-gray-200 max-w-xs truncate" x-text="run.description"></td>
                     <td class="px-4 py-3 text-gray-500 text-xs hidden md:table-cell" x-text="fmtDate(run.queued_at)"></td>
                     <td class="px-4 py-3 text-gray-500 text-xs hidden md:table-cell" x-text="run.completed_at ? fmtDate(run.completed_at) : '—'"></td>
@@ -188,87 +262,52 @@
               </tbody>
             </table>
           </div>
-
         </div><!-- end left column -->
 
-        <!-- Right column: PR sidebar -->
+        <!-- PR sidebar -->
         <div class="w-80 flex-shrink-0">
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-
             <div class="flex items-center justify-between mb-3">
-              <h2 class="text-sm font-semibold text-gray-200">
-                Open PRs<span x-show="prs.length > 0" class="text-gray-500 ml-1" x-text="'(' + prs.length + ')'"></span>
-              </h2>
+              <h2 class="text-sm font-semibold text-gray-200">Open PRs<span x-show="prs.length > 0" class="text-gray-500 ml-1" x-text="'(' + prs.length + ')'"></span></h2>
               <button @click="loadPrs()" class="text-xs text-gray-400 hover:text-white" title="Refresh">↻</button>
             </div>
-
-            <!-- Loading -->
             <p x-show="prsLoading" class="text-xs text-gray-500">Loading…</p>
-
-            <!-- Not authenticated -->
             <template x-if="!prsLoading && prsAuthNeeded">
               <div class="space-y-2">
                 <p class="text-xs text-gray-400">Not logged in to GitHub</p>
-                <button @click="loginGitHub()"
-                  class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded w-full text-left">
-                  Login with GitHub
-                </button>
+                <button @click="loginGitHub()" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded w-full text-left">Login with GitHub</button>
                 <p x-show="prsLoginPending" class="text-xs text-gray-500">Opening browser…</p>
               </div>
             </template>
-
-            <!-- gh not installed -->
             <template x-if="!prsLoading && !prsAuthNeeded && prsError && prsError.includes('not installed')">
               <p class="text-xs text-gray-400">GitHub CLI not available — install from cli.github.com</p>
             </template>
-
-            <!-- Non-auth error -->
             <template x-if="!prsLoading && !prsAuthNeeded && prsError && !prsError.includes('not installed')">
               <p class="text-xs text-gray-400">GitHub repo not detected</p>
             </template>
-
-            <!-- No open PRs -->
             <template x-if="!prsLoading && !prsError && !prsAuthNeeded && prs.length === 0">
               <p class="text-xs text-gray-500">No open PRs</p>
             </template>
-
-            <!-- PR list -->
             <template x-if="!prsLoading && !prsError && !prsAuthNeeded && prs.length > 0">
               <div class="space-y-3">
                 <template x-for="pr in prs" :key="pr.number">
                   <div class="border border-gray-800 rounded p-3">
                     <div class="flex items-start gap-2 mb-2">
-                      <span class="text-xs text-gray-200 font-medium flex-1 leading-snug"
-                        x-text="'#' + pr.number + ' ' + pr.title"></span>
-                      <span x-show="pr.olamo_created"
-                        class="text-xs bg-green-900 text-green-300 px-1.5 py-0.5 rounded flex-shrink-0">OLamo</span>
+                      <span class="text-xs text-gray-200 font-medium flex-1 leading-snug" x-text="'#' + pr.number + ' ' + pr.title"></span>
+                      <span x-show="pr.olamo_created" class="text-xs bg-green-900 text-green-300 px-1.5 py-0.5 rounded flex-shrink-0">OLamo</span>
                     </div>
                     <div class="flex gap-2">
-                      <button @click="quickCheckPr(pr.number)"
-                        class="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded">
-                        Quick check
-                      </button>
-                      <button @click="fullRunPr(pr)"
-                        :disabled="activeRun !== null"
-                        :title="activeRun !== null ? 'A run is already in progress' : ''"
-                        class="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2 py-1 rounded">
-                        Full run ▶
-                      </button>
+                      <button @click="quickCheckPr(pr.number)" class="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded">Quick check</button>
+                      <button @click="fullRunPr(pr)" :disabled="activeRun !== null" :title="activeRun !== null ? 'A run is already in progress' : ''"
+                        class="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2 py-1 rounded">Full run ▶</button>
                     </div>
-                    <!-- Quick check result -->
                     <template x-if="prCheckResults[pr.number]">
                       <div class="mt-2 text-xs text-gray-400 border-t border-gray-800 pt-2 space-y-0.5">
                         <template x-if="prCheckResults[pr.number].error">
-                          <span class="text-red-400">
-                            Could not load —
-                            <a @click="quickCheckPr(pr.number)" class="underline cursor-pointer">retry</a>
-                          </span>
+                          <span class="text-red-400">Could not load — <a @click="quickCheckPr(pr.number)" class="underline cursor-pointer">retry</a></span>
                         </template>
                         <template x-if="!prCheckResults[pr.number].error">
-                          <div>
-                            <p x-text="prCiStatus(pr.number)"></p>
-                            <p x-text="'Comments: ' + prUnresolvedCount(pr.number)"></p>
-                          </div>
+                          <div><p x-text="prCiStatus(pr.number)"></p><p x-text="'Comments: ' + prUnresolvedCount(pr.number)"></p></div>
                         </template>
                       </div>
                     </template>
@@ -276,35 +315,29 @@
                 </template>
               </div>
             </template>
-
           </div>
-        </div><!-- end right column -->
-
-      </div><!-- end flex row -->
-    </div><!-- end dashboard -->
+        </div>
+      </div>
+    </div>
 
     <!-- ── SUBMIT TASK ────────────────────────────────────────── -->
     <div x-show="view === 'submit'">
       <h1 class="text-xl font-bold mb-6">Submit Task</h1>
       <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 max-w-4xl">
         <label class="block text-sm text-gray-400 mb-2">Task description</label>
-        <textarea
-          x-model="submitDesc"
-          rows="5"
+        <textarea x-model="submitDesc" rows="5"
           placeholder="Describe the feature or change you want the team to implement..."
           class="w-full bg-gray-800 border border-gray-700 rounded p-3 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-indigo-500 resize-none">
         </textarea>
 
-        <!-- Agent cards grid (data-driven from team.agents) -->
+        <!-- Agent cards grid -->
         <template x-if="team.agents && team.agents.length > 0">
           <div class="mt-5">
             <p class="text-xs text-gray-500 mb-2">Agents for this run — click to override</p>
             <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr))">
               <template x-for="agent in team.agents" :key="agent.role">
                 <div>
-                  <!-- Collapsed card -->
-                  <div
-                    @click="_submitCardOpen = (_submitCardOpen === agent.role) ? null : agent.role"
+                  <div @click="_submitCardOpen = (_submitCardOpen === agent.role) ? null : agent.role"
                     :class="{
                       'border-indigo-500': (_submitAgentCfgs[agent.role] || {}).engine === 'claude' && _submitCardOpen !== agent.role,
                       'border-green-600': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot' && _submitCardOpen !== agent.role,
@@ -315,9 +348,7 @@
                       'border-gray-700': !(_submitAgentCfgs[agent.role] || {}).engine,
                     }"
                     class="relative bg-gray-800 border rounded-md p-2.5 cursor-pointer transition-all select-none">
-                    <!-- Pencil indicator -->
                     <span class="absolute top-1.5 right-2 text-gray-500 text-xs">✎</span>
-                    <!-- Role -->
                     <p :class="{
                         'text-indigo-400': (_submitAgentCfgs[agent.role] || {}).engine === 'claude',
                         'text-green-400': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot',
@@ -325,7 +356,6 @@
                         'text-gray-300': !(_submitAgentCfgs[agent.role] || {}).engine,
                       }"
                       class="text-xs font-semibold pr-4 truncate" x-text="agent.role"></p>
-                    <!-- Engine badge -->
                     <span :class="{
                         'bg-indigo-900 text-indigo-300': (_submitAgentCfgs[agent.role] || {}).engine === 'claude',
                         'bg-green-900 text-green-300': (_submitAgentCfgs[agent.role] || {}).engine === 'copilot',
@@ -334,34 +364,25 @@
                       }"
                       class="inline-block text-xs px-1 py-0.5 rounded mt-1"
                       x-text="(_submitAgentCfgs[agent.role] || {}).engine || '—'"></span>
-                    <!-- Model -->
                     <p class="text-gray-500 text-xs mt-0.5 truncate"
                       x-text="((_submitAgentCfgs[agent.role] || {}).model_config || {}).model || '—'"></p>
                   </div>
-
-                  <!-- Expanded inline editor -->
                   <template x-if="_submitCardOpen === agent.role">
                     <div class="mt-1 bg-gray-800 border border-gray-700 rounded-md p-3 space-y-3">
-                      <!-- Engine toggle -->
                       <div>
                         <p class="text-xs text-gray-500 mb-1">Engine</p>
                         <div class="flex rounded overflow-hidden border border-gray-700">
-                          <button
-                            @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'claude'}"
+                          <button @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'claude'}"
                             :class="(_submitAgentCfgs[agent.role] || {}).engine === 'claude' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
                             class="flex-1 text-xs py-1 transition-colors">Claude</button>
-                          <button
-                            @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'copilot'}"
+                          <button @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'copilot'}"
                             :class="(_submitAgentCfgs[agent.role] || {}).engine === 'copilot' ? 'bg-green-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
                             class="flex-1 text-xs py-1 border-l border-gray-700 transition-colors">Copilot</button>
-                            <button
-                              @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'openai', model_config: {...(_submitAgentCfgs[agent.role].model_config||{}), mode:'advanced'}}"
-                              :class="(_submitAgentCfgs[agent.role] || {}).engine === 'openai' ? 'bg-orange-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
-                              class="flex-1 text-xs py-1 border-l border-gray-700 transition-colors">OpenAI</button>
+                          <button @click="_submitAgentCfgs[agent.role] = {..._submitAgentCfgs[agent.role], engine: 'openai', model_config: {...(_submitAgentCfgs[agent.role].model_config||{}), mode:'advanced'}}"
+                            :class="(_submitAgentCfgs[agent.role] || {}).engine === 'openai' ? 'bg-orange-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+                            class="flex-1 text-xs py-1 border-l border-gray-700 transition-colors">OpenAI</button>
                         </div>
                       </div>
-
-                      <!-- Model name -->
                       <div>
                         <p class="text-xs text-gray-500 mb-1">Model</p>
                         <input type="text"
@@ -370,23 +391,16 @@
                           class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-indigo-500"
                           placeholder="model name" />
                       </div>
-
-                      <!-- Mode toggle (Subscription / API BYOK) -->
                       <div x-show="(_submitAgentCfgs[agent.role] || {}).engine !== 'openai'">
-                        <button
-                          @click="const cur = (_submitAgentCfgs[agent.role].model_config || {}).mode; const next = cur === 'advanced' ? 'simple' : 'advanced'; _submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {..._submitAgentCfgs[agent.role].model_config, mode: next} }"
+                        <button @click="const cur = (_submitAgentCfgs[agent.role].model_config || {}).mode; const next = cur === 'advanced' ? 'simple' : 'advanced'; _submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {..._submitAgentCfgs[agent.role].model_config, mode: next} }"
                           class="text-xs text-gray-500 hover:text-gray-300"
-                          x-text="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' ? 'Subscription ▲' : 'API (BYOK) ▼'">
-                        </button>
+                          x-text="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' ? 'Subscription ▲' : 'API (BYOK) ▼'"></button>
                       </div>
-
-                      <!-- API (BYOK) expanded fields -->
                       <template x-if="((_submitAgentCfgs[agent.role] || {}).model_config || {}).mode === 'advanced' || (_submitAgentCfgs[agent.role] || {}).engine === 'openai' || !!((_submitAgentCfgs[agent.role] || {}).model_config || {}).base_url">
                         <div class="space-y-2">
                           <div>
                             <label class="block text-xs text-gray-500 mb-1">Provider</label>
-                            <select
-                              :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).provider_type || 'openai'"
+                            <select :value="((_submitAgentCfgs[agent.role] || {}).model_config || {}).provider_type || 'openai'"
                               @change="_submitAgentCfgs[agent.role] = { ..._submitAgentCfgs[agent.role], model_config: {...(_submitAgentCfgs[agent.role].model_config || {}), provider_type: $event.target.value} }"
                               class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none">
                               <option value="openai">openai</option>
@@ -412,33 +426,25 @@
                           </div>
                         </div>
                       </template>
-
                     </div>
                   </template>
                 </div>
               </template>
             </div>
-
-            <!-- Save as default button (shown only when dirty) -->
             <template x-if="_submitIsDirty()">
               <div class="mt-3 flex items-center gap-3">
-                <button @click="saveSubmitDefaults()"
-                  :disabled="_savingDefaults"
+                <button @click="saveSubmitDefaults()" :disabled="_savingDefaults"
                   class="text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white px-3 py-1.5 rounded transition-colors">
                   <span x-show="!_savingDefaults">Save as default</span>
                   <span x-show="_savingDefaults">Saving…</span>
                 </button>
-                <p x-show="submitError && _savingDefaults === false" class="text-red-400 text-xs" x-text="submitError"></p>
               </div>
             </template>
           </div>
         </template>
 
-        <!-- Submit row -->
         <div class="mt-4 flex items-center gap-3">
-          <button
-            @click="submitTask()"
-            :disabled="submitting || !submitDesc.trim() || _savingDefaults"
+          <button @click="submitTask()" :disabled="submitting || !submitDesc.trim() || _savingDefaults"
             class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm px-5 py-2 rounded transition-colors">
             <span x-show="!submitting">Submit</span>
             <span x-show="submitting">Submitting…</span>
@@ -451,15 +457,15 @@
 
     <!-- ── RUN DETAIL ─────────────────────────────────────────── -->
     <div x-show="view === 'run'">
-      <div class="flex items-center gap-3 mb-6">
+      <div class="flex items-center gap-3 mb-6 flex-wrap">
         <button @click="view = 'dashboard'" class="text-gray-500 hover:text-white text-sm">← Back</button>
-        <h1 class="text-xl font-bold" x-text="selectedRun ? selectedRun.description : 'Run Detail'"></h1>
+        <h1 class="text-xl font-bold truncate flex-1" x-text="selectedRun ? selectedRun.description : 'Run Detail'"></h1>
         <template x-if="selectedRun">
-          <span :class="statusBadge(selectedRun.status)" class="px-2 py-0.5 rounded text-xs font-semibold" x-text="selectedRun.status"></span>
+          <span :class="statusBadge(selectedRun.status)" class="px-2 py-0.5 rounded text-xs font-semibold flex-shrink-0" x-text="selectedRun.status"></span>
         </template>
         <template x-if="selectedRun && selectedRun.status === 'interrupted'">
           <button @click="resumeRun(selectedRun.id)"
-            class="ml-auto px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-yellow-100 text-xs font-semibold rounded transition-colors">
+            class="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-yellow-100 text-xs font-semibold rounded transition-colors">
             ▶ Resume from checkpoint
           </button>
         </template>
@@ -468,10 +474,9 @@
       <template x-if="selectedRun">
         <div class="space-y-4">
 
-          <!-- Row 1: Meta + Execution Graph -->
+          <!-- Row 1: Meta + Pipeline Viz -->
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-            <!-- Meta (col 1) -->
+            <!-- Meta card -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
               <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Details</h2>
               <dl class="space-y-2 text-sm">
@@ -480,14 +485,18 @@
                   <dd class="text-gray-300 font-mono text-xs truncate max-w-[140px]" x-text="selectedRun.id"></dd>
                 </div>
                 <div class="flex justify-between">
+                  <dt class="text-gray-500">Status</dt>
+                  <dd class="text-gray-300" x-text="selectedRun.status"></dd>
+                </div>
+                <div class="flex justify-between">
                   <dt class="text-gray-500">Queued</dt>
                   <dd class="text-gray-300" x-text="fmtDate(selectedRun.queued_at)"></dd>
                 </div>
-                <div class="flex justify-between" x-show="selectedRun.started_at">
+                <div x-show="selectedRun.started_at" class="flex justify-between">
                   <dt class="text-gray-500">Started</dt>
                   <dd class="text-gray-300" x-text="fmtDate(selectedRun.started_at)"></dd>
                 </div>
-                <div class="flex justify-between" x-show="selectedRun.completed_at">
+                <div x-show="selectedRun.completed_at" class="flex justify-between">
                   <dt class="text-gray-500">Completed</dt>
                   <dd class="text-gray-300" x-text="fmtDate(selectedRun.completed_at)"></dd>
                 </div>
@@ -497,64 +506,96 @@
               </template>
             </div>
 
-            <!-- Execution Graph (col 2–3) -->
+            <!-- Pipeline stage cards (col 2–3) -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 lg:col-span-2">
-              <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Execution Graph</h2>
-              <template x-if="buildExecutionGraph().length === 0">
-                <p class="text-xs text-gray-700">No execution data yet.</p>
-              </template>
+              <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Pipeline</h2>
               <div class="overflow-x-auto scrollbar-thin pb-2">
                 <div class="flex items-start gap-1 min-w-max">
-                  <template x-for="(grp, si) in buildExecutionGraph()" :key="si">
-                    <div class="flex items-start gap-1 flex-shrink-0">
-                      <!-- Stage column -->
-                      <div class="flex flex-col items-center min-w-[92px]">
-                        <!-- Stage label badge -->
-                        <div class="text-xs text-indigo-300 font-semibold mb-3 px-2 py-0.5 bg-indigo-900/40 rounded-full border border-indigo-800/40 max-w-[92px] truncate text-center" x-text="grp.label"></div>
-                        <!-- Agent nodes + connectors -->
-                        <div class="flex flex-col items-center">
-                          <template x-for="(agent, ai) in grp.agents" :key="ai">
-                            <div class="flex flex-col items-center">
-                              <div
-                                :class="[rolePillColor(agent.role), agent.running ? 'node-glow ring-2 ring-white/30' : '']"
-                                class="px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap cursor-default transition-all"
-                                :title="agent.role"
-                                x-text="agentLabel(agent.role)">
-                              </div>
-                              <!-- Vertical connector to next node -->
-                              <template x-if="ai < grp.agents.length - 1">
-                                <div class="w-px h-3 bg-gray-700 my-0.5"></div>
-                              </template>
+                  <template x-for="(stage, si) in pipelineStagesForRun()" :key="stage.key">
+                    <div class="flex items-start gap-1">
+                      <!-- Stage card -->
+                      <div :class="stageCardClassDark(stage)" class="rounded-lg border-2 p-3 w-44 transition-all">
+                        <!-- Stage header -->
+                        <div class="flex items-center justify-between mb-2">
+                          <span class="text-xs font-bold uppercase tracking-wide" :class="stageLabelClassDark(stage)" x-text="stage.label"></span>
+                          <span x-show="stageStatusIcon(stage)" x-text="stageStatusIcon(stage)" class="text-sm"></span>
+                        </div>
+                        <!-- Cycle badge -->
+                        <div x-show="stage.isLoop && stage.cycle > 0" class="mb-2">
+                          <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                            :class="stage.status === 'active' ? 'bg-indigo-800 text-indigo-300' : 'bg-gray-800 text-gray-500'"
+                            x-text="'Cycle ' + stage.cycle"></span>
+                        </div>
+                        <!-- Agent badges -->
+                        <div class="space-y-1">
+                          <template x-for="role in stage.agents" :key="role">
+                            <div @click.stop="openLogViewer(selectedRun.id, role)"
+                              :class="agentBadgeClassDark(role)"
+                              class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity">
+                              <span :class="agentDotClassDark(role)" class="w-1.5 h-1.5 rounded-full flex-shrink-0"></span>
+                              <span class="font-medium truncate" x-text="agentLabel(role)"></span>
                             </div>
                           </template>
                         </div>
+                        <!-- Active pulse -->
+                        <div x-show="stage.status === 'active'" class="mt-2 flex items-center gap-1 text-xs text-indigo-400">
+                          <span class="animate-pulse">●</span>
+                          <span x-text="activeAgentActionForRun()"></span>
+                        </div>
                       </div>
-                      <!-- Horizontal arrow to next stage -->
-                      <div x-show="si < buildExecutionGraph().length - 1" class="text-gray-600 text-xs self-center mt-5 px-1 flex-shrink-0">→</div>
+                      <!-- Arrow between stages -->
+                      <div x-show="si < 3" class="flex items-center self-center h-16 text-gray-700 text-xl px-0.5 flex-shrink-0">→</div>
                     </div>
                   </template>
                 </div>
               </div>
               <!-- Live indicator -->
               <template x-if="selectedRun.status === 'running'">
-                <div class="mt-3 pt-3 border-t border-gray-800/50 flex items-center gap-2 text-xs text-indigo-400">
+                <div class="mt-3 pt-3 border-t border-gray-800/50 flex items-center gap-3 text-xs">
                   <div class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>
-                  <span x-text="currentAgent ? agentLabel(currentAgent) + ' running…' : 'Pipeline running…'"></span>
-                  <span class="text-gray-600 font-mono tabular-nums" x-show="currentAgent" x-text="fmtElapsed(agentElapsed)"></span>
+                  <span class="text-indigo-400 font-medium">Pipeline running…</span>
+                  <span class="ml-auto text-gray-600 text-[10px]">
+                    <span class="text-green-400 font-semibold" x-text="Object.values(_agentState||{}).filter(a=>['completed','failed'].includes(a.status)).length"></span>
+                    /
+                    <span x-text="Object.values(_agentState||{}).length"></span> agents done
+                  </span>
+                </div>
+              </template>
+              <template x-if="selectedRun.status === 'completed'">
+                <div class="mt-3 pt-3 border-t border-gray-800/50 flex items-center gap-2 text-xs text-green-400">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span>Pipeline completed</span>
                 </div>
               </template>
             </div>
-
           </div>
 
-          <!-- Row 2: Event log (full width) -->
+          <!-- Row 2: Structured Activity Log -->
           <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-            <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Event Log</h2>
-            <div class="h-64 overflow-y-auto scrollbar-thin space-y-1">
-              <template x-for="(evt, i) in runDetail.events" :key="i">
-                <div :class="eventColor(evt.type)" class="text-xs py-0.5" x-text="formatEvent(evt)"></div>
+            <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">Activity Log</h2>
+            <div class="h-64 overflow-y-auto scrollbar-thin space-y-0.5" id="activityLog">
+              <template x-for="(entry, i) in buildActivityLog()" :key="i">
+                <div>
+                  <template x-if="entry.type === 'stage'">
+                    <div class="flex items-center gap-2 py-1.5 border-t border-gray-800 mt-2 first:border-0 first:mt-0">
+                      <span class="text-gray-700">┄</span>
+                      <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider" x-text="entry.label"></span>
+                    </div>
+                  </template>
+                  <template x-if="entry.type === 'agent'">
+                    <div class="flex items-center gap-2 py-1 pl-4 text-xs">
+                      <span :class="entry.success === null ? 'text-indigo-400 animate-pulse' : entry.success ? 'text-green-400' : 'text-red-400'"
+                        x-text="entry.success === null ? '●' : entry.success ? '✓' : '✗'"></span>
+                      <button @click="openLogViewer(selectedRun.id, entry.role)"
+                        class="font-medium hover:underline text-indigo-400 flex-shrink-0" x-text="agentLabel(entry.role)"></button>
+                      <span class="text-gray-500 truncate" x-text="entry.summary || entry.action || ''"></span>
+                      <span class="ml-auto text-gray-600 whitespace-nowrap flex-shrink-0"
+                        x-text="entry.elapsed !== '…' ? entry.elapsed + 's' : '…'"></span>
+                    </div>
+                  </template>
+                </div>
               </template>
-              <p x-show="runDetail.events.length === 0" class="text-gray-600 text-xs">No events recorded.</p>
+              <p x-show="buildActivityLog().length === 0" class="text-gray-600 text-xs py-4 text-center">No activity yet…</p>
             </div>
           </div>
 
@@ -562,20 +603,87 @@
       </template>
     </div>
 
+    <!-- ── LOG VIEWER ─────────────────────────────────────────── -->
+    <div x-show="view === 'log-viewer'">
+      <div class="flex items-center gap-3 mb-4 flex-wrap">
+        <button @click="view = 'run'; onViewChange('run')" class="text-gray-400 hover:text-white text-sm flex-shrink-0">← Back</button>
+        <span class="text-gray-600">·</span>
+        <span class="font-semibold text-gray-200">Agent: <span class="text-indigo-300" x-text="logViewerRole"></span></span>
+        <span class="text-gray-600 font-mono text-xs truncate" x-text="logViewerRunId"></span>
+        <span x-show="_logRefreshInterval" class="ml-auto text-xs text-indigo-400 animate-pulse flex-shrink-0">⟳ Auto-refreshing</span>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 overflow-auto font-mono text-xs text-green-300 whitespace-pre-wrap leading-relaxed scrollbar-thin"
+        style="max-height: calc(100vh - 10rem); min-height: 400px"
+        x-text="logViewerContent || 'Loading…'">
+      </div>
+    </div>
+
     <!-- ── TEAM ───────────────────────────────────────────────── -->
     <div x-show="view === 'team'">
       <h1 class="text-xl font-bold mb-6">Team</h1>
 
-      <!-- Pipeline graph -->
+      <!-- Pipeline Flow Diagram -->
       <div class="bg-gray-900 rounded-lg border border-gray-800 p-4 mb-6">
-        <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-3">4-Stage Pipeline</h2>
-        <div class="flex flex-wrap items-center gap-2">
-          <template x-for="(stage, i) in pipelineStages" :key="i">
-            <div class="flex items-center gap-2">
-              <div class="bg-indigo-900/50 border border-indigo-700 rounded px-3 py-1.5 text-xs text-indigo-300 whitespace-nowrap" x-text="stage"></div>
-              <span x-show="i < pipelineStages.length - 1" class="text-gray-600">→</span>
+        <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Pipeline Flow</h2>
+        <div class="overflow-x-auto scrollbar-thin pb-2">
+          <div class="flex items-start gap-2 min-w-max">
+            <!-- Design Loop -->
+            <div class="border border-indigo-700/60 bg-indigo-900/20 rounded-lg px-4 py-3 w-44">
+              <div class="text-xs font-bold text-indigo-300 mb-2">
+                Design Loop
+                <span class="text-indigo-500 ml-1">↻</span><span class="text-indigo-400" x-text="team.cycle_limits?.max_design_cycles ?? 'N'"></span>
+              </div>
+              <div class="space-y-1">
+                <div class="text-xs text-indigo-400 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0"></span>lead-developer
+                </div>
+                <div class="text-xs text-indigo-500 pl-3">⟷</div>
+                <div class="text-xs text-indigo-400 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>qa-engineer
+                </div>
+              </div>
             </div>
-          </template>
+            <div class="flex items-center self-center text-gray-700 text-lg pt-2">→</div>
+            <!-- Implementation Loop -->
+            <div class="border border-blue-700/60 bg-blue-900/20 rounded-lg px-4 py-3 w-52">
+              <div class="text-xs font-bold text-blue-300 mb-2">
+                Implementation Loop
+                <span class="text-blue-500 ml-1">↻</span><span class="text-blue-400" x-text="team.cycle_limits?.max_impl_cycles ?? 'N'"></span>
+              </div>
+              <div class="space-y-1">
+                <div class="text-xs text-blue-400 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 flex-shrink-0"></span>developer
+                </div>
+                <div class="text-xs text-blue-600 pl-3 text-[10px]">→ build</div>
+                <div class="text-xs text-blue-400 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0"></span>build-agent
+                </div>
+                <div class="text-xs text-blue-600 pl-3 text-[10px]">→ review</div>
+                <div class="text-xs text-blue-400 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 flex-shrink-0"></span>code-reviewer
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center self-center text-gray-700 text-lg pt-2">→</div>
+            <!-- Commit & PR -->
+            <div class="border border-purple-700/60 bg-purple-900/20 rounded-lg px-4 py-3 w-36">
+              <div class="text-xs font-bold text-purple-300 mb-2">Commit &amp; PR</div>
+              <div class="text-xs text-purple-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-pink-400 flex-shrink-0"></span>repo-manager
+              </div>
+            </div>
+            <div class="flex items-center self-center text-gray-700 text-lg pt-2">→</div>
+            <!-- PR Poll -->
+            <div class="border border-pink-700/60 bg-pink-900/20 rounded-lg px-4 py-3 w-36">
+              <div class="text-xs font-bold text-pink-300 mb-2">
+                PR Poll
+                <span class="text-pink-500 ml-1">↻</span><span class="text-pink-400" x-text="team.cycle_limits?.max_pr_cycles ?? 'N'"></span>
+              </div>
+              <div class="text-xs text-pink-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-pink-400 flex-shrink-0"></span>repo-manager
+              </div>
+            </div>
+          </div>
         </div>
         <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-gray-500">
           <div>Design loops: <span class="text-gray-300" x-text="team.cycle_limits?.max_design_cycles ?? '—'"></span></div>
@@ -593,15 +701,8 @@
               <div :class="roleColor(agent.role)" class="w-2 h-2 rounded-full flex-shrink-0"></div>
               <span class="font-semibold text-sm" x-text="agent.role"></span>
               <div class="ml-auto flex items-center gap-1.5">
-                <span
-                  :class="agent.engine === 'openai'
-                    ? 'bg-orange-900/50 text-orange-400 border-orange-800'
-                    : agent.engine === 'copilot'
-                    ? 'bg-green-900/50 text-green-400 border-green-800'
-                    : 'bg-indigo-900/50 text-indigo-400 border-indigo-800'"
-                  class="text-xs px-1.5 py-0.5 rounded border"
-                  x-text="agent.engine || 'claude'">
-                </span>
+                <span :class="agent.engine === 'openai' ? 'bg-orange-900/50 text-orange-400 border-orange-800' : agent.engine === 'copilot' ? 'bg-green-900/50 text-green-400 border-green-800' : 'bg-indigo-900/50 text-indigo-400 border-indigo-800'"
+                  class="text-xs px-1.5 py-0.5 rounded border" x-text="agent.engine || 'claude'"></span>
                 <span class="text-xs px-2 py-0.5 bg-gray-800 rounded text-gray-400" x-text="agent.model"></span>
               </div>
             </div>
@@ -614,11 +715,13 @@
     <!-- ── SETTINGS ───────────────────────────────────────────── -->
     <div x-show="view === 'settings'">
       <h1 class="text-xl font-bold mb-2">Settings</h1>
-      <p class="text-xs text-gray-500 mb-6">Changes take effect after the current run completes.</p>
+      <p class="text-xs text-gray-500 mb-4">Changes take effect after the current run completes.</p>
 
+      <!-- Locked indicator -->
       <template x-if="settings.is_locked">
-        <div class="mb-4 bg-yellow-900/30 border border-yellow-700 rounded p-3 text-xs text-yellow-300">
-          A run is active — settings will be applied after it completes.
+        <div class="mb-4 bg-yellow-900/30 border border-yellow-700/60 rounded p-3 text-sm text-yellow-300 flex items-center gap-2">
+          <span>🔒</span>
+          <span>Settings locked — a run is in progress</span>
         </div>
       </template>
 
@@ -628,11 +731,9 @@
           <template x-for="field in modelFields" :key="field.key">
             <div>
               <label class="block text-xs text-gray-400 mb-1" x-text="field.label"></label>
-              <input
-                type="text"
-                x-model="settingsForm[field.key]"
-                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500"
-              />
+              <input type="text" x-model="settingsForm[field.key]"
+                :disabled="settings.is_locked"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
             </div>
           </template>
         </div>
@@ -640,30 +741,18 @@
         <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Orchestration Mode</h2>
         <div class="mb-6">
           <div class="flex rounded overflow-hidden border border-gray-700 w-fit">
-            <button
-              @click="settingsForm.orchestration_mode = 'pm'"
-              :class="settingsForm.orchestration_mode === 'pm'
-                ? 'bg-indigo-600 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white'"
-              class="px-4 py-2 text-sm transition-colors">
-              PM Sub-agent
-            </button>
-            <button
-              @click="settingsForm.orchestration_mode = 'orchestrated'"
-              :class="settingsForm.orchestration_mode === 'orchestrated'
-                ? 'bg-indigo-600 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white'"
-              class="px-4 py-2 text-sm border-l border-gray-700 transition-colors">
-              Python-orchestrated
-            </button>
+            <button @click="settingsForm.orchestration_mode = 'pm'"
+              :class="settingsForm.orchestration_mode === 'pm' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+              :disabled="settings.is_locked"
+              class="px-4 py-2 text-sm transition-colors disabled:opacity-50">PM Sub-agent</button>
+            <button @click="settingsForm.orchestration_mode = 'orchestrated'"
+              :class="settingsForm.orchestration_mode === 'orchestrated' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
+              :disabled="settings.is_locked"
+              class="px-4 py-2 text-sm border-l border-gray-700 transition-colors disabled:opacity-50">Python-orchestrated</button>
           </div>
           <p class="mt-2 text-xs text-gray-500">
-            <span x-show="settingsForm.orchestration_mode === 'pm'">
-              A PM LLM agent orchestrates the team via the Task tool. Flexible but uses more tokens.
-            </span>
-            <span x-show="settingsForm.orchestration_mode === 'orchestrated'">
-              Python code drives the pipeline directly. Deterministic loops, lower cost, no PM agent.
-            </span>
+            <span x-show="settingsForm.orchestration_mode === 'pm'">A PM LLM agent orchestrates the team via the Task tool. Flexible but uses more tokens.</span>
+            <span x-show="settingsForm.orchestration_mode === 'orchestrated'">Python code drives the pipeline directly. Deterministic loops, lower cost, no PM agent.</span>
           </p>
         </div>
 
@@ -672,13 +761,9 @@
           <template x-for="field in cycleFields" :key="field.key">
             <div>
               <label class="block text-xs text-gray-400 mb-1" x-text="field.label"></label>
-              <input
-                type="number"
-                min="1"
-                max="10"
-                x-model.number="settingsForm[field.key]"
-                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500"
-              />
+              <input type="number" min="1" max="10" x-model.number="settingsForm[field.key]"
+                :disabled="settings.is_locked"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50" />
             </div>
           </template>
         </div>
@@ -687,34 +772,30 @@
         <div class="space-y-3 mb-6">
           <template x-for="agent in agentRows" :key="agent.role">
             <div class="border border-gray-700 rounded-lg p-3">
-              <!-- Header: role + engine toggle + model + advanced toggle -->
               <div class="flex items-center gap-3 mb-2 flex-wrap">
                 <span class="text-xs font-semibold text-gray-200 w-32 flex-shrink-0" x-text="agent.role"></span>
                 <div class="flex rounded overflow-hidden border border-gray-700">
-                  <button @click="setAgentEngine(agent.role, 'claude')"
+                  <button @click="setAgentEngine(agent.role, 'claude')" :disabled="settings.is_locked"
                     :class="getAgentEngine(agent.role) === 'claude' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
-                    class="px-3 py-1 text-xs transition-colors">Claude</button>
-                  <button @click="setAgentEngine(agent.role, 'copilot')"
+                    class="px-3 py-1 text-xs transition-colors disabled:opacity-50">Claude</button>
+                  <button @click="setAgentEngine(agent.role, 'copilot')" :disabled="settings.is_locked"
                     :class="getAgentEngine(agent.role) === 'copilot' ? 'bg-green-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'"
-                    class="px-3 py-1 text-xs border-l border-gray-700 transition-colors">Copilot</button>
+                    class="px-3 py-1 text-xs border-l border-gray-700 transition-colors disabled:opacity-50">Copilot</button>
                 </div>
-                <input type="text"
-                  :value="getAgentModel(agent.role)"
-                  @input="setAgentModel(agent.role, $event.target.value)"
-                  class="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-indigo-500"
+                <input type="text" :value="getAgentModel(agent.role)" @input="setAgentModel(agent.role, $event.target.value)"
+                  :disabled="settings.is_locked"
+                  class="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                   placeholder="model name" />
-                <button @click="toggleAgentAdvanced(agent.role)"
-                  class="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
-                  x-show="getAgentEngine(agent.role) !== 'openai'"
+                <button @click="toggleAgentAdvanced(agent.role)" x-show="getAgentEngine(agent.role) !== 'openai'" :disabled="settings.is_locked"
+                  class="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0 disabled:opacity-50"
                   x-text="isAgentAdvanced(agent.role) ? 'Custom Provider ▲' : 'Custom Provider (BYOK) ▼'"></button>
               </div>
-              <!-- BYOK fields — auto-shown for openai engine or when base_url is set -->
               <div x-show="isAgentAdvanced(agent.role)" class="mt-2 grid grid-cols-2 gap-2 pl-4">
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">Provider</label>
-                  <select :value="getAgentField(agent.role, 'provider_type')"
-                    @change="setAgentField(agent.role, 'provider_type', $event.target.value)"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none">
+                  <select :value="getAgentField(agent.role, 'provider_type')" @change="setAgentField(agent.role, 'provider_type', $event.target.value)"
+                    :disabled="settings.is_locked"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none disabled:opacity-50">
                     <option value="openai">openai</option>
                     <option value="azure">azure</option>
                     <option value="anthropic">anthropic</option>
@@ -722,27 +803,26 @@
                 </div>
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">Base URL</label>
-                  <input type="text" :value="getAgentField(agent.role, 'base_url')"
-                    @input="setAgentField(agent.role, 'base_url', $event.target.value)"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
+                  <input type="text" :value="getAgentField(agent.role, 'base_url')" @input="setAgentField(agent.role, 'base_url', $event.target.value)"
+                    :disabled="settings.is_locked"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none disabled:opacity-50"
                     placeholder="https://..." />
                 </div>
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">API Key</label>
-                  <input type="password" :value="getAgentField(agent.role, 'api_key')"
-                    @input="setAgentField(agent.role, 'api_key', $event.target.value)"
-                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none"
+                  <input type="password" :value="getAgentField(agent.role, 'api_key')" @input="setAgentField(agent.role, 'api_key', $event.target.value)"
+                    :disabled="settings.is_locked"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none disabled:opacity-50"
                     placeholder="sk-..." />
                 </div>
                 <div>
                   <label class="block text-xs text-gray-500 mb-1">Extra Params (JSON)</label>
-                  <input type="text" :value="getAgentExtraParams(agent.role)"
-                    @input="setAgentExtraParams(agent.role, $event.target.value)"
+                  <input type="text" :value="getAgentExtraParams(agent.role)" @input="setAgentExtraParams(agent.role, $event.target.value)"
+                    :disabled="settings.is_locked"
                     :class="agentExtraParamsError(agent.role) ? 'border-red-500' : 'border-gray-700'"
-                    class="w-full bg-gray-800 border rounded px-2 py-1 text-xs text-gray-100 focus:outline-none font-mono"
+                    class="w-full bg-gray-800 border rounded px-2 py-1 text-xs text-gray-100 focus:outline-none font-mono disabled:opacity-50"
                     placeholder="{}" />
-                  <p x-show="agentExtraParamsError(agent.role)" class="text-red-400 text-xs mt-0.5"
-                    x-text="agentExtraParamsError(agent.role)"></p>
+                  <p x-show="agentExtraParamsError(agent.role)" class="text-red-400 text-xs mt-0.5" x-text="agentExtraParamsError(agent.role)"></p>
                 </div>
               </div>
               <!-- MCP Servers -->
@@ -755,12 +835,9 @@
                 <div x-show="isAgentMcpOpen(agent.role)" class="mt-2 space-y-1">
                   <template x-for="(server, idx) in getAgentMcpList(agent.role)" :key="server._id || idx">
                     <div class="flex items-center gap-2">
-                      <input type="text" :value="server.name"
-                        @input="setMcpName(agent.role, idx, $event.target.value)"
-                        class="w-28 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs focus:outline-none"
-                        placeholder="name" />
-                      <input type="text" :value="server.config"
-                        @input="setMcpConfig(agent.role, idx, $event.target.value)"
+                      <input type="text" :value="server.name" @input="setMcpName(agent.role, idx, $event.target.value)"
+                        class="w-28 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs focus:outline-none" placeholder="name" />
+                      <input type="text" :value="server.config" @input="setMcpConfig(agent.role, idx, $event.target.value)"
                         class="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs font-mono focus:outline-none"
                         placeholder='{"type":"local","command":"npx","args":["./s.js"],"tools":["*"]}' />
                       <button @click="removeMcpServer(agent.role, idx)" class="text-red-500 hover:text-red-400 text-xs">×</button>
@@ -773,31 +850,28 @@
           </template>
         </div>
 
-        <!-- Copilot Connection (shown when ≥1 agent uses Copilot engine) -->
+        <!-- Copilot Connection -->
         <template x-if="anyAgentUsesCopilot()">
           <div class="mb-6">
             <h2 class="text-xs text-gray-400 uppercase tracking-wide mb-4">Copilot Connection</h2>
             <p class="text-xs text-gray-500 mb-3">
               Copilot engine uses GitHub Copilot by default. To use a custom provider (z.ai, Azure, etc.),
-              expand <strong class="text-gray-400">Custom Provider (BYOK) ▼</strong> on the agent card and fill in Base URL + API Key.
-              The Copilot SDK will route to your provider instead.
+              expand <strong class="text-gray-400">Custom Provider (BYOK) ▼</strong> on the agent card.
             </p>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">
-                GitHub Token
-                <span class="text-gray-600 font-normal">(optional — falls back to COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN)</span>
+              <label class="block text-xs text-gray-400 mb-1">GitHub Token
+                <span class="text-gray-600 font-normal">(optional — falls back to COPILOT_GITHUB_TOKEN / GH_TOKEN)</span>
               </label>
               <input type="password" x-model="settingsForm.copilot_github_token"
-                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500"
+                :disabled="settings.is_locked"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
                 placeholder="ghp_..." />
             </div>
           </div>
         </template>
 
         <div class="flex items-center gap-3">
-          <button
-            @click="saveSettings()"
-            :disabled="savingSettings"
+          <button @click="saveSettings()" :disabled="savingSettings || settings.is_locked"
             class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm px-5 py-2 rounded transition-colors">
             <span x-show="!savingSettings">Save</span>
             <span x-show="savingSettings">Saving…</span>
@@ -810,7 +884,84 @@
 
   </main>
 
+  <!-- ── DESIGN REVIEW OVERLAY ─────────────────────────────── -->
+  <div x-show="approvalPending" x-cloak class="fixed inset-0 z-50 bg-gray-950/95 flex flex-col">
+    <!-- Header -->
+    <div class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-4 shrink-0">
+      <div class="flex-1 min-w-0">
+        <span class="font-bold text-gray-100">Design Review</span>
+        <span class="text-gray-400 text-sm ml-3 truncate" x-text="approvalSpecSummary"></span>
+      </div>
+      <button @click="submitApproval(true)"
+        class="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0">
+        ✓ Approve
+      </button>
+      <button @click="submitRevise()" :disabled="specComments.length === 0"
+        class="bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0"
+        x-text="specComments.length > 0 ? 'Revise (' + specComments.length + ')' : 'Revise'">
+      </button>
+    </div>
+    <!-- Dev response banner -->
+    <div x-show="approvalDevResponse" class="bg-amber-900/40 border-b border-amber-700/50 px-6 py-2 text-sm text-amber-300 shrink-0">
+      <span class="font-semibold">Developer response:</span> <span x-text="approvalDevResponse"></span>
+    </div>
+    <!-- Body: two columns -->
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Left: spec render -->
+      <div class="flex-1 overflow-y-auto bg-gray-950 p-8 scrollbar-thin">
+        <div id="spec-render" @mouseup="onSpecMouseUp($event)"
+          class="spec-content leading-relaxed text-sm text-gray-200 select-text max-w-3xl mx-auto">
+        </div>
+      </div>
+      <!-- Right: comments panel -->
+      <div class="w-80 shrink-0 bg-gray-900 border-l border-gray-800 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-thin">
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+          Comments (<span x-text="specComments.length"></span>)
+        </div>
+        <div x-show="specComments.length === 0" class="text-sm text-gray-600">
+          Select text in the spec to add a comment.
+        </div>
+        <template x-for="c in specComments" :key="c.id">
+          <div class="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm cursor-pointer hover:bg-gray-700/80 transition-colors"
+            :style="'border-left: 3px solid ' + c.color"
+            @mouseenter="highlightComment(c.id)" @mouseleave="clearHighlight()">
+            <div class="text-xs text-gray-500 italic truncate mb-1" x-text="'&quot;' + c.selectedText + '&quot;'"></div>
+            <div class="text-gray-300" x-text="c.commentText"></div>
+            <button @click.stop="removeComment(c.id)" class="mt-1 text-xs text-gray-600 hover:text-red-400">× remove</button>
+          </div>
+        </template>
+      </div>
+    </div>
+    <!-- Comment draft popover -->
+    <div x-show="commentDraft.visible" x-cloak
+      class="fixed bg-gray-800 shadow-2xl rounded-lg border border-gray-700 p-3 z-[60] w-72"
+      :style="'top:' + commentDraft.top + 'px; left:' + commentDraft.left + 'px'">
+      <div class="text-xs text-gray-500 italic mb-2 truncate" x-text="'&quot;' + commentDraft.selectedText + '&quot;'"></div>
+      <textarea x-model="commentDraft.commentText" rows="3" placeholder="Your comment…"
+        class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        @keydown.escape="commentDraft.visible = false"></textarea>
+      <div class="flex gap-2 mt-2">
+        <button @click="addComment()" :disabled="!commentDraft.commentText.trim()"
+          class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs disabled:opacity-40 transition-colors">
+          Add Comment
+        </button>
+        <button @click="commentDraft.visible = false" class="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+      </div>
+    </div>
+  </div>
+
 <script>
+const PIPELINE_STAGES = [
+  { key: 'design',   label: 'Design',         isLoop: true,  agents: ['lead-developer','qa-engineer'],
+    matches: s => /stage\s*1/i.test(s) || /design/i.test(s) },
+  { key: 'impl',     label: 'Implementation', isLoop: true,  agents: ['developer','build-agent','code-reviewer','security-reviewer','performance-reviewer'],
+    matches: s => /stage\s*2/i.test(s) || /impl/i.test(s) || /build/i.test(s) },
+  { key: 'commit',   label: 'Commit & PR',    isLoop: false, agents: ['repo-manager'],
+    matches: s => /stage\s*3/i.test(s) || /commit/i.test(s) },
+  { key: 'pr-poll',  label: 'PR Poll',        isLoop: false, agents: ['repo-manager'],
+    matches: s => /stage\s*4/i.test(s) || /pr.?poll/i.test(s) || (/poll/i.test(s) && !/commit/i.test(s)) },
+];
+
 function app() {
   return {
     // Navigation
@@ -846,13 +997,21 @@ function app() {
     submitting: false,
     submitOk: false,
     submitError: '',
-    _submitAgentCfgs: {},    // role → AgentEngineConfig-shaped dict, initialized from team.agents
-    _submitCardOpen: null,   // role string of the currently expanded card, or null
-    _savingDefaults: false,  // true while PUT /api/settings is in flight
+    _submitAgentCfgs: {},
+    _submitCardOpen: null,
+    _savingDefaults: false,
 
     // Run detail
     selectedRun: null,
     runDetail: { events: [] },
+    _agentState: {},
+    _stagesReached: new Set(),
+
+    // Log viewer
+    logViewerRole: '',
+    logViewerContent: '',
+    logViewerRunId: '',
+    _logRefreshInterval: null,
 
     // Team
     team: { agents: [], pipeline: [], cycle_limits: {} },
@@ -876,8 +1035,6 @@ function app() {
       { key: 'max_impl_cycles',   label: 'Max Impl Cycles' },
       { key: 'max_pr_cycles',     label: 'Max PR Cycles' },
     ],
-
-    // Agent config UI state
     agentRows: [
       { role: 'lead-developer' }, { role: 'developer' }, { role: 'code-reviewer' },
       { role: 'qa-engineer' },    { role: 'build-agent' }, { role: 'repo-manager' },
@@ -897,15 +1054,11 @@ function app() {
       'code-reviewer': 'copilot', 'qa-engineer': 'copilot',
       'build-agent': 'copilot', 'repo-manager': 'copilot',
     },
-    // Maps each role to the AppSettings field name holding its Claude tier model
     _claudeDefaultTier: {
       'lead-developer': 'opus_model', 'developer': 'sonnet_model',
       'code-reviewer': 'opus_model', 'qa-engineer': 'opus_model',
       'build-agent': 'haiku_model', 'repo-manager': 'haiku_model',
     },
-
-    // Stages reached (from run detail events)
-    _stagesReached: new Set(),
 
     // PR sidebar
     prs: [],
@@ -916,9 +1069,22 @@ function app() {
     _prsPollInterval: null,
     prCheckResults: {},
 
+    // Approval / Design Review
+    approvalPending: false,
+    approvalRunId: null,
+    approvalSpecSummary: '',
+    approvalDevResponse: '',
+    approvalSeq: null,
+    approvalSpecText: '',
+    specComments: [],
+    commentDraft: { visible: false, selectedText: '', commentText: '', range: null, top: 0, left: 0 },
+    commentColors: ['#6366f1','#f59e0b','#10b981','#ef4444','#a855f7'],
+    nextColorIdx: 0,
+
     destroy() {
       if (this._prsPollInterval) clearInterval(this._prsPollInterval);
       if (this._agentTimerInterval) clearInterval(this._agentTimerInterval);
+      if (this._logRefreshInterval) { clearInterval(this._logRefreshInterval); this._logRefreshInterval = null; }
     },
 
     async init() {
@@ -928,6 +1094,10 @@ function app() {
     },
 
     onViewChange(id) {
+      if (id !== 'log-viewer' && this._logRefreshInterval) {
+        clearInterval(this._logRefreshInterval);
+        this._logRefreshInterval = null;
+      }
       if (id === 'dashboard') this.loadPrs();
       if (id === 'submit') this.loadTeam();
       if (id === 'team') this.loadTeam();
@@ -944,72 +1114,85 @@ function app() {
         setTimeout(() => this.connectSSE(), 3000);
       };
       this._sse.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          this.handleSseEvent(evt);
-        } catch {}
+        try { const evt = JSON.parse(e.data); this.handleSseEvent(evt); } catch {}
       };
     },
 
     handleSseEvent(evt) {
       if (evt.type === 'run_completed') {
-        // Close last agent entry
         clearInterval(this._agentTimerInterval);
         this._agentTimerInterval = null;
-        this.agentHistory = this.agentHistory.map(item =>
-          item.endAt === null ? { ...item, endAt: Date.now() } : item
-        );
+        this.agentHistory = this.agentHistory.map(item => item.endAt === null ? { ...item, endAt: Date.now() } : item);
         this.currentAgent = null;
         this.currentAgentLastMsg = '';
         this.loadRuns();
-        if (this.activeRun && this.activeRun.id === evt.run_id) {
-          this.activeRun.status = evt.status;
+        if (evt.run_id === this.approvalRunId) this.approvalPending = false;
+        if (this.selectedRun && evt.run_id && evt.run_id === this.selectedRun.id) {
+          this.runDetail.events.push(evt);
         }
         return;
       }
 
-      // Track agent starts
+      if (evt.type === 'run_queued' || evt.type === 'run_started') {
+        this.loadRuns();
+        if (evt.type === 'run_started') this.loadSettings();
+      }
+
       if (evt.type === 'agent_started') {
-        // Close previous open entry
-        this.agentHistory = this.agentHistory.map(item =>
-          item.endAt === null ? { ...item, endAt: Date.now() } : item
-        );
+        this.agentHistory = this.agentHistory.map(item => item.endAt === null ? { ...item, endAt: Date.now() } : item);
         this.currentAgent = evt.role;
         this.currentAgentLastMsg = '';
         this._currentAgentStartAt = Date.now();
         this.agentElapsed = 0;
-        this.agentHistory = [...this.agentHistory, {
-          role: evt.role,
-          stage: this.currentStage,
-          startAt: this._currentAgentStartAt,
-          endAt: null,
-        }];
+        this.agentHistory = [...this.agentHistory, { role: evt.role, stage: this.currentStage, startAt: this._currentAgentStartAt, endAt: null }];
         clearInterval(this._agentTimerInterval);
         this._agentTimerInterval = setInterval(() => {
           this.agentElapsed = Math.floor((Date.now() - this._currentAgentStartAt) / 1000);
         }, 500);
       }
 
-      // Capture last agent message snippet
       if (evt.type === 'agent_message' && evt.role === this.currentAgent) {
         const text = (evt.text || '').trim();
         if (text) this.currentAgentLastMsg = text.slice(0, 160);
       }
 
-      // Append to live log
       this.liveEvents.push(evt);
       if (this.liveEvents.length > 200) this.liveEvents.shift();
 
       if (evt.type === 'stage_changed') this.currentStage = evt.stage;
 
-      // Also append to run detail if viewing the active run
-      if (this.selectedRun && this.activeRun && this.selectedRun.id === this.activeRun.id) {
+      // Append to run detail if viewing this run
+      if (this.selectedRun && evt.run_id && evt.run_id === this.selectedRun.id) {
         this.runDetail.events.push(evt);
         if (evt.type === 'stage_changed') this._stagesReached.add(evt.stage);
         this.$nextTick(() => {
           const log = document.getElementById('activityLog');
           if (log) log.scrollTop = log.scrollHeight;
         });
+      }
+
+      // Approval gate
+      if (evt.type === 'awaiting_approval') {
+        this.approvalRunId = evt.run_id;
+        this.approvalSpecSummary = evt.specSummary || '';
+        this.approvalSeq = evt.seq;
+        this.approvalDevResponse = evt.developerResponse || '';
+        this.specComments = [];
+        this.approvalPending = true;
+        if (!this.selectedRun || this.selectedRun.id !== evt.run_id) {
+          const run = this.runs.find(r => r.id === evt.run_id);
+          if (run) {
+            this.selectedRun = run;
+            this.view = 'run';
+            this.runDetail = { events: [] };
+            this._agentState = {};
+            fetch('/api/runs/' + evt.run_id + '/events')
+              .then(r => r.json())
+              .then(events => { this.runDetail = { events }; })
+              .catch(() => {});
+          }
+        }
+        this.fetchSpecContent(evt.run_id, evt.seq).catch(() => {});
       }
     },
 
@@ -1019,47 +1202,83 @@ function app() {
         const res = await fetch('/api/runs');
         this.runs = await res.json();
         this.activeRun = this.runs.find(r => r.status === 'running') || null;
+        if (this.selectedRun) {
+          const updated = this.runs.find(r => r.id === this.selectedRun.id);
+          if (updated) this.selectedRun = updated;
+        }
       } catch {}
     },
 
     async openRun(id) {
       this.view = 'run';
       this._stagesReached = new Set();
+      this._agentState = {};
       this.runDetail = { events: [] };
       try {
         const [runRes, evtRes] = await Promise.all([
-          fetch(`/api/runs/${id}`),
-          fetch(`/api/runs/${id}/events`),
+          fetch('/api/runs/' + id),
+          fetch('/api/runs/' + id + '/events'),
         ]);
         this.selectedRun = await runRes.json();
         const events = await evtRes.json();
         this.runDetail.events = events;
         events.forEach(e => { if (e.type === 'stage_changed') this._stagesReached.add(e.stage); });
       } catch {}
+      // Check approval
+      try {
+        const ar = await fetch('/api/runs/' + id + '/approval');
+        if (ar.ok) {
+          const approvalEvt = this.runDetail.events.slice().reverse().find(e => e.type === 'awaiting_approval');
+          if (approvalEvt) {
+            this.approvalRunId = id;
+            this.approvalSpecSummary = approvalEvt.specSummary || '';
+            this.approvalSeq = approvalEvt.seq;
+            this.approvalDevResponse = approvalEvt.developerResponse || '';
+            this.specComments = [];
+            this.approvalPending = true;
+            await this.fetchSpecContent(id, approvalEvt.seq);
+          }
+        }
+      } catch {}
     },
 
-    stageReached(stage) {
-      return this._stagesReached.has(stage);
-    },
+    stageReached(stage) { return this._stagesReached.has(stage); },
 
-    // ── Submit ───────────────────────────────────────────────
     async resumeRun(runId) {
       try {
-        const res = await fetch(`/api/runs/${runId}/resume`, { method: 'POST' });
+        const res = await fetch('/api/runs/' + runId + '/resume', { method: 'POST' });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          alert(`Resume failed: ${d.detail || res.statusText}`);
+          alert('Resume failed: ' + (d.detail || res.statusText));
           return;
         }
         await this.loadRuns();
-        if (this.selectedRun && this.selectedRun.id === runId) {
-          await this.openRun(runId);
-        }
-      } catch (e) {
-        alert(`Resume error: ${e.message}`);
+        if (this.selectedRun && this.selectedRun.id === runId) await this.openRun(runId);
+      } catch (e) { alert('Resume error: ' + e.message); }
+    },
+
+    // ── Log Viewer ───────────────────────────────────────────
+    async openLogViewer(runId, role) {
+      this.logViewerRole = role;
+      this.logViewerRunId = runId;
+      this.logViewerContent = 'Loading…';
+      this.view = 'log-viewer';
+      if (this._logRefreshInterval) { clearInterval(this._logRefreshInterval); this._logRefreshInterval = null; }
+      await this._fetchLog(runId, role);
+      const run = this.runs.find(r => r.id === runId);
+      if (run && ['running', 'queued'].includes(run.status)) {
+        this._logRefreshInterval = setInterval(() => this._fetchLog(runId, role), 3000);
       }
     },
 
+    async _fetchLog(runId, role) {
+      try {
+        const res = await fetch('/api/runs/' + runId + '/agents/' + role + '/log');
+        this.logViewerContent = res.status === 404 ? 'No logs yet.' : res.ok ? await res.text() : 'Error: ' + res.statusText;
+      } catch { this.logViewerContent = 'Failed to load log.'; }
+    },
+
+    // ── Submit ───────────────────────────────────────────────
     async submitTask() {
       this.submitError = '';
       this.submitOk = false;
@@ -1081,9 +1300,7 @@ function app() {
         setTimeout(() => { this.submitOk = false; }, 3000);
       } catch (err) {
         this.submitError = err.message || 'Failed to submit task';
-      } finally {
-        this.submitting = false;
-      }
+      } finally { this.submitting = false; }
     },
 
     // ── Team ─────────────────────────────────────────────────
@@ -1092,19 +1309,11 @@ function app() {
         const res = await fetch('/api/team');
         this.team = await res.json();
         this.pipelineStages = this.team.pipeline || this.pipelineStages;
-        // Rebuild submit form baseline from fresh team data
         const cfgs = {};
         for (const agent of (this.team.agents || [])) {
           cfgs[agent.role] = {
             engine: agent.engine,
-            model_config: {
-              mode: agent.config_mode,
-              model: agent.model,
-              provider_type: 'openai',
-              base_url: '',
-              api_key: '',
-              extra_params: {},
-            },
+            model_config: { mode: agent.config_mode, model: agent.model, provider_type: 'openai', base_url: '', api_key: '', extra_params: {} },
             mcp_servers: {},
           };
         }
@@ -1138,15 +1347,21 @@ function app() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.settingsForm),
         });
+        if (res.status === 409) {
+          this.settingsError = 'Settings locked — a run is in progress.';
+          return;
+        }
+        if (!res.ok) {
+          this.settingsError = 'Failed to save';
+          return;
+        }
         const data = await res.json();
         this.settings.config = data.config;
         this.settingsSaved = true;
         setTimeout(() => { this.settingsSaved = false; }, 2000);
       } catch (err) {
         this.settingsError = err.message || 'Failed to save';
-      } finally {
-        this.savingSettings = false;
-      }
+      } finally { this.savingSettings = false; }
     },
 
     // ── PR sidebar ───────────────────────────────────────────
@@ -1161,19 +1376,13 @@ function app() {
         if (data.error) {
           const authRes = await fetch('/api/prs/auth');
           const authData = await authRes.json();
-          if (!authData.authenticated) {
-            this.prsAuthNeeded = true;
-          } else {
-            this.prsError = data.error;
-          }
+          if (!authData.authenticated) this.prsAuthNeeded = true;
+          else this.prsError = data.error;
         } else {
           this.prs = data.prs;
         }
-      } catch {
-        this.prsError = 'Failed to load PRs';
-      } finally {
-        this.prsLoading = false;
-      }
+      } catch { this.prsError = 'Failed to load PRs'; }
+      finally { this.prsLoading = false; }
     },
 
     async loginGitHub() {
@@ -1187,7 +1396,6 @@ function app() {
           this.prsLoginPending = false;
           return;
         }
-        // Poll every 2 s until authenticated, then reload PRs
         this._prsPollInterval = setInterval(async () => {
           const authRes = await fetch('/api/prs/auth');
           const authData = await authRes.json();
@@ -1199,25 +1407,19 @@ function app() {
             await this.loadPrs();
           }
         }, 2000);
-      } catch {
-        this.prsLoginPending = false;
-        this.prsError = 'Login failed';
-      }
+      } catch { this.prsLoginPending = false; this.prsError = 'Login failed'; }
     },
 
     async quickCheckPr(number) {
-      // Second click collapses
       if (this.prCheckResults[number] && !this.prCheckResults[number].error) {
         this.prCheckResults = { ...this.prCheckResults, [number]: null };
         return;
       }
       try {
-        const res = await fetch(`/api/prs/${number}/check`);
+        const res = await fetch('/api/prs/' + number + '/check');
         const data = await res.json();
         this.prCheckResults = { ...this.prCheckResults, [number]: data };
-      } catch {
-        this.prCheckResults = { ...this.prCheckResults, [number]: { error: 'Network error' } };
-      }
+      } catch { this.prCheckResults = { ...this.prCheckResults, [number]: { error: 'Network error' } }; }
     },
 
     async fullRunPr(pr) {
@@ -1226,14 +1428,9 @@ function app() {
         const res = await fetch('/api/runs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pr_url: pr.url,
-            description: `PR #${pr.number}: ${pr.title}`,
-          }),
+          body: JSON.stringify({ pr_url: pr.url, description: 'PR #' + pr.number + ': ' + pr.title }),
         });
-        if (res.ok) {
-          await this.loadRuns();
-        }
+        if (res.ok) await this.loadRuns();
       } catch {}
     },
 
@@ -1242,7 +1439,7 @@ function app() {
       if (!checks || checks.length === 0) return 'CI: no checks configured';
       if (checks.some(c => c.conclusion === 'FAILURE')) {
         const names = checks.filter(c => c.conclusion === 'FAILURE').map(c => c.name).join(', ');
-        return `CI: failing (${names})`;
+        return 'CI: failing (' + names + ')';
       }
       if (checks.some(c => c.conclusion === null)) return 'CI: in progress';
       return 'CI: passing';
@@ -1253,20 +1450,207 @@ function app() {
       return (data.comments || []).filter(c => !c.isResolved).length;
     },
 
-    // ── Submit card helpers ──────────────────────────────────
+    // ── Pipeline Visualization ───────────────────────────────
+    pipelineStagesForRun() {
+      const events = this.runDetail.events;
+      const stageState = {};
+      PIPELINE_STAGES.forEach(s => { stageState[s.key] = { status: 'pending', cycle: 0 }; });
+      const agentState = {};
+      let currentStageKey = null;
+
+      for (const evt of events) {
+        if (evt.type === 'stage_changed') {
+          const stg = PIPELINE_STAGES.find(s => s.matches(evt.stage));
+          if (!stg) continue;
+          if (currentStageKey && currentStageKey !== stg.key && stageState[currentStageKey].status === 'active')
+            stageState[currentStageKey].status = 'completed';
+          currentStageKey = stg.key;
+          stageState[stg.key] = { status: 'active', cycle: evt.cycle || 0 };
+        } else if (evt.type === 'agent_started') {
+          agentState[evt.role] = { status: 'running', action: evt.action || '', stageKey: currentStageKey };
+        } else if (evt.type === 'agent_completed') {
+          agentState[evt.role] = {
+            status: evt.success ? 'completed' : 'failed',
+            summary: evt.summary || '', elapsed: evt.elapsed_ms ? (evt.elapsed_ms / 1000).toFixed(1) : '0',
+            stageKey: currentStageKey,
+          };
+          if (!evt.success && currentStageKey) stageState[currentStageKey].hasFailure = true;
+        }
+      }
+
+      if (this.selectedRun?.status === 'completed' && currentStageKey) stageState[currentStageKey].status = 'completed';
+      if (this.selectedRun?.status === 'failed' && currentStageKey) stageState[currentStageKey].status = 'failed';
+
+      this._agentState = agentState;
+      return PIPELINE_STAGES.map(s => ({ ...s, ...stageState[s.key] }));
+    },
+
+    stageCardClassDark(stage) {
+      if (stage.status === 'active') return 'border-indigo-500 bg-indigo-900/20';
+      if (stage.status === 'completed') return stage.hasFailure ? 'border-orange-700/60 bg-orange-900/10' : 'border-green-700/60 bg-green-900/10';
+      if (stage.status === 'failed') return 'border-red-700/60 bg-red-900/10';
+      return 'border-gray-800 bg-gray-900';
+    },
+
+    stageLabelClassDark(stage) {
+      if (stage.status === 'active') return 'text-indigo-300';
+      if (stage.status === 'completed') return stage.hasFailure ? 'text-orange-400' : 'text-green-400';
+      if (stage.status === 'failed') return 'text-red-400';
+      return 'text-gray-500';
+    },
+
+    stageStatusIcon(stage) {
+      if (stage.status === 'active') return '●';
+      if (stage.status === 'completed') return stage.hasFailure ? '△' : '✓';
+      if (stage.status === 'failed') return '✗';
+      return '';
+    },
+
+    agentBadgeClassDark(role) {
+      const a = this._agentState?.[role];
+      if (!a) return 'bg-gray-800/50 text-gray-600';
+      if (a.status === 'running') return 'bg-blue-900/50 text-blue-300';
+      if (a.status === 'completed') return 'bg-green-900/30 text-green-400';
+      if (a.status === 'failed') return 'bg-red-900/30 text-red-400';
+      return 'bg-gray-800/50 text-gray-600';
+    },
+
+    agentDotClassDark(role) {
+      const a = this._agentState?.[role];
+      if (!a) return 'bg-gray-600';
+      if (a.status === 'running') return 'bg-blue-400 animate-pulse';
+      if (a.status === 'completed') return 'bg-green-400';
+      if (a.status === 'failed') return 'bg-red-400';
+      return 'bg-gray-600';
+    },
+
+    activeAgentActionForRun() {
+      const a = this._agentState;
+      if (!a) return '';
+      const running = Object.entries(a).find(([, v]) => v.status === 'running');
+      return running ? (running[1].action || this.agentLabel(running[0])) : '';
+    },
+
+    // ── Activity Log ─────────────────────────────────────────
+    buildActivityLog() {
+      const events = this.runDetail.events;
+      const log = [];
+      let lastStageLabel = null;
+
+      for (const evt of events) {
+        if (evt.type === 'stage_changed') {
+          const label = evt.cycle > 0 ? evt.stage + ' — cycle ' + evt.cycle : evt.stage;
+          if (label !== lastStageLabel) { log.push({ type: 'stage', label }); lastStageLabel = label; }
+        } else if (evt.type === 'agent_completed') {
+          log.push({
+            type: 'agent', role: evt.role, success: evt.success,
+            summary: evt.summary || '', elapsed: evt.elapsed_ms ? (evt.elapsed_ms / 1000).toFixed(1) : '0',
+          });
+        }
+      }
+
+      // Show currently running agent at bottom
+      if (this._agentState) {
+        const running = Object.entries(this._agentState).find(([, v]) => v.status === 'running');
+        if (running) log.push({ type: 'agent', role: running[0], success: null, summary: running[1].action || '', elapsed: '…' });
+      }
+      return log;
+    },
+
+    // ── Design Review ─────────────────────────────────────────
+    async fetchSpecContent(runId, seq) {
+      if (!seq) return;
+      try {
+        const r = await fetch('/api/runs/' + runId + '/events/' + seq + '/content');
+        if (!r.ok) return;
+        this.approvalSpecText = await r.text();
+        this.$nextTick(() => this.renderSpec());
+      } catch {}
+    },
+
+    renderSpec() {
+      const el = document.getElementById('spec-render');
+      if (!el || !window.marked || !window.DOMPurify) return;
+      const rawHtml = window.marked?.parse ? window.marked.parse(this.approvalSpecText) : window.marked(this.approvalSpecText);
+      el['innerHTML'] = window.DOMPurify.sanitize(rawHtml);
+    },
+
+    onSpecMouseUp(event) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      this.commentDraft = {
+        visible: true,
+        selectedText: sel.toString().trim(),
+        commentText: '',
+        range: range.cloneRange(),
+        top: Math.min(rect.bottom + 8, window.innerHeight - 200),
+        left: Math.min(rect.left, window.innerWidth - 300),
+      };
+    },
+
+    addComment() {
+      if (!this.commentDraft.commentText.trim()) return;
+      const color = this.commentColors[this.nextColorIdx % this.commentColors.length];
+      this.nextColorIdx++;
+      const id = 'c-' + Date.now();
+      try {
+        const mark = document.createElement('mark');
+        mark.id = 'mark-' + id;
+        mark.style.cssText = 'background:' + color + '44;border-bottom:2px solid ' + color + ';cursor:pointer';
+        this.commentDraft.range.surroundContents(mark);
+      } catch (_) {}
+      this.specComments.push({ id, selectedText: this.commentDraft.selectedText, commentText: this.commentDraft.commentText, color });
+      this.commentDraft.visible = false;
+      window.getSelection()?.removeAllRanges();
+    },
+
+    removeComment(id) {
+      const mark = document.getElementById('mark-' + id);
+      if (mark) mark.replaceWith(...mark.childNodes);
+      this.specComments = this.specComments.filter(c => c.id !== id);
+    },
+
+    highlightComment(id) {
+      const mark = document.getElementById('mark-' + id);
+      if (mark) { mark.style.outline = '2px solid #3b82f6'; mark.scrollIntoView({ block: 'nearest' }); }
+    },
+
+    clearHighlight() {
+      document.querySelectorAll('#spec-render mark').forEach(m => m.style.outline = '');
+    },
+
+    async submitApproval(approved) {
+      await this.postApproval({ approved });
+      if (approved) this.approvalPending = false;
+    },
+
+    async submitRevise() {
+      if (!this.specComments.length) return;
+      const comments = this.specComments.map(c => ({ selectedText: c.selectedText, commentText: c.commentText }));
+      await this.postApproval({ approved: false, comments });
+      this.approvalPending = false;
+      this.specComments = [];
+    },
+
+    async postApproval(body) {
+      try {
+        await fetch('/api/runs/' + this.approvalRunId + '/approval', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch {}
+    },
+
+    // ── Submit card helpers ───────────────────────────────────
     _submitIsDirty() {
       for (const agent of (this.team.agents || [])) {
         const current = this._submitAgentCfgs[agent.role];
         const baseline = {
           engine: agent.engine,
-          model_config: {
-            mode: agent.config_mode,
-            model: agent.model,
-            provider_type: 'openai',
-            base_url: '',
-            api_key: '',
-            extra_params: {},
-          },
+          model_config: { mode: agent.config_mode, model: agent.model, provider_type: 'openai', base_url: '', api_key: '', extra_params: {} },
           mcp_servers: {},
         };
         if (JSON.stringify(current) !== JSON.stringify(baseline)) return true;
@@ -1280,19 +1664,10 @@ function app() {
         const current = this._submitAgentCfgs[agent.role];
         const baseline = {
           engine: agent.engine,
-          model_config: {
-            mode: agent.config_mode,
-            model: agent.model,
-            provider_type: 'openai',
-            base_url: '',
-            api_key: '',
-            extra_params: {},
-          },
+          model_config: { mode: agent.config_mode, model: agent.model, provider_type: 'openai', base_url: '', api_key: '', extra_params: {} },
           mcp_servers: {},
         };
-        if (JSON.stringify(current) !== JSON.stringify(baseline)) {
-          dirty[agent.role] = current;
-        }
+        if (JSON.stringify(current) !== JSON.stringify(baseline)) dirty[agent.role] = current;
       }
       return dirty;
     },
@@ -1308,21 +1683,17 @@ function app() {
         });
         if (!res.ok) throw new Error(await res.text());
         await this.loadTeam();
-      } catch (err) {
-        this.submitError = err.message || 'Failed to save defaults';
-      } finally {
-        this._savingDefaults = false;
-      }
+      } catch (err) { this.submitError = err.message || 'Failed to save defaults'; }
+      finally { this._savingDefaults = false; }
     },
 
-    // ── Agent config helpers ──────────────────────────────────────
+    // ── Agent config helpers ──────────────────────────────────
     _getAgentCfg(role) {
       if (!this.settingsForm.agent_configs) this.settingsForm.agent_configs = {};
       if (!this.settingsForm.agent_configs[role]) {
         this.settingsForm.agent_configs[role] = {
           engine: this._defaultEngines[role] || 'claude',
-          model_config: { mode: 'simple', model: '', provider_type: 'openai',
-                          base_url: '', api_key: '', extra_params: {} },
+          model_config: { mode: 'simple', model: '', provider_type: 'openai', base_url: '', api_key: '', extra_params: {} },
           mcp_servers: {},
         };
       }
@@ -1333,29 +1704,20 @@ function app() {
       const cfg = this._getAgentCfg(role);
       cfg.engine = engine;
       if (engine === 'openai') {
-        // OpenAI-compatible engine always requires BYOK — auto-enable advanced mode
         cfg.model_config.mode = 'advanced';
         this._agentAdvanced = { ...this._agentAdvanced, [role]: true };
       } else if (cfg.model_config.mode === 'simple') {
-        if (engine === 'copilot') {
-          cfg.model_config.model = this._copilotDefaults[role] || '';
-        } else {
-          const tierField = this._claudeDefaultTier[role] || 'sonnet_model';
-          cfg.model_config.model = this.settingsForm[tierField] || '';
-        }
+        if (engine === 'copilot') cfg.model_config.model = this._copilotDefaults[role] || '';
+        else { const tf = this._claudeDefaultTier[role] || 'sonnet_model'; cfg.model_config.model = this.settingsForm[tf] || ''; }
       }
     },
     getAgentModel(role) { return this._getAgentCfg(role).model_config.model; },
     setAgentModel(role, val) { this._getAgentCfg(role).model_config.model = val; },
     isAgentAdvanced(role) {
-      // Always show BYOK fields if: openai engine, or base_url is already configured, or manually toggled
       const cfg = this._getAgentCfg(role);
-      return !!this._agentAdvanced[role]
-        || cfg.engine === 'openai'
-        || !!(cfg.model_config && cfg.model_config.base_url);
+      return !!this._agentAdvanced[role] || cfg.engine === 'openai' || !!(cfg.model_config && cfg.model_config.base_url);
     },
     toggleAgentAdvanced(role) {
-      // Use object spread to trigger Alpine.js v3 reactivity on new keys
       const next = !this._agentAdvanced[role];
       this._agentAdvanced = { ...this._agentAdvanced, [role]: next };
       this._getAgentCfg(role).model_config.mode = next ? 'advanced' : 'simple';
@@ -1364,8 +1726,7 @@ function app() {
     setAgentField(role, field, val) { this._getAgentCfg(role).model_config[field] = val; },
     getAgentExtraParams(role) {
       if (this._agentExtraParamsRaw[role] === undefined)
-        this._agentExtraParamsRaw[role] = JSON.stringify(
-          this._getAgentCfg(role).model_config.extra_params || {});
+        this._agentExtraParamsRaw[role] = JSON.stringify(this._getAgentCfg(role).model_config.extra_params || {});
       return this._agentExtraParamsRaw[role];
     },
     setAgentExtraParams(role, val) {
@@ -1373,22 +1734,17 @@ function app() {
       try {
         this._getAgentCfg(role).model_config.extra_params = JSON.parse(val);
         this._agentExtraParamsErr = { ...this._agentExtraParamsErr, [role]: '' };
-      } catch {
-        this._agentExtraParamsErr = { ...this._agentExtraParamsErr, [role]: 'Invalid JSON' };
-      }
+      } catch { this._agentExtraParamsErr = { ...this._agentExtraParamsErr, [role]: 'Invalid JSON' }; }
     },
     agentExtraParamsError(role) { return this._agentExtraParamsErr[role] || ''; },
     isAgentMcpOpen(role) { return !!this._agentMcpOpen[role]; },
-    toggleAgentMcp(role) {
-      this._agentMcpOpen = { ...this._agentMcpOpen, [role]: !this._agentMcpOpen[role] };
-    },
+    toggleAgentMcp(role) { this._agentMcpOpen = { ...this._agentMcpOpen, [role]: !this._agentMcpOpen[role] }; },
     mcpServerCount(role) { return Object.keys(this._getAgentCfg(role).mcp_servers || {}).length; },
     getAgentMcpList(role) {
       if (!this._agentMcpLists[role]) {
         const s = this._getAgentCfg(role).mcp_servers || {};
         let _id = 0;
-        this._agentMcpLists[role] = Object.entries(s).map(([name, cfg]) =>
-          ({ name, config: JSON.stringify(cfg), _id: _id++ }));
+        this._agentMcpLists[role] = Object.entries(s).map(([name, cfg]) => ({ name, config: JSON.stringify(cfg), _id: _id++ }));
       }
       return this._agentMcpLists[role];
     },
@@ -1409,145 +1765,123 @@ function app() {
     anyAgentUsesCopilot() {
       if (!this.settingsForm.agent_configs) return false;
       const explicit = Object.values(this.settingsForm.agent_configs).some(c => c.engine === 'copilot');
-      const byDefault = Object.keys(this._defaultEngines).some(role =>
-        !this.settingsForm.agent_configs[role] && this._defaultEngines[role] === 'copilot');
+      const byDefault = Object.keys(this._defaultEngines).some(role => !this.settingsForm.agent_configs[role] && this._defaultEngines[role] === 'copilot');
       return explicit || byDefault;
     },
-    hasAgentExtraParamsErrors() {
-      return Object.values(this._agentExtraParamsErr).some(e => !!e);
-    },
+    hasAgentExtraParamsErrors() { return Object.values(this._agentExtraParamsErr).some(e => !!e); },
 
     // ── Helpers ──────────────────────────────────────────────
     statusBadge(status) {
-      return {
-        queued:      'bg-gray-700 text-gray-300',
-        running:     'bg-indigo-700 text-indigo-200',
-        interrupted: 'bg-yellow-800 text-yellow-200',
-        completed:   'bg-green-800 text-green-200',
-        failed:      'bg-red-800 text-red-200',
-      }[status] || 'bg-gray-700 text-gray-300';
+      return { queued:'bg-gray-700 text-gray-300', running:'bg-indigo-700 text-indigo-200',
+        interrupted:'bg-yellow-800 text-yellow-200', completed:'bg-green-800 text-green-200',
+        failed:'bg-red-800 text-red-200' }[status] || 'bg-gray-700 text-gray-300';
     },
 
     roleColor(role) {
-      return {
-        'PM':              'bg-purple-400',
-        'lead-developer':  'bg-blue-400',
-        'developer':       'bg-cyan-400',
-        'code-reviewer':   'bg-yellow-400',
-        'qa-engineer':     'bg-green-400',
-        'build-agent':     'bg-orange-400',
-        'repo-manager':    'bg-pink-400',
-      }[role] || 'bg-gray-400';
+      return { 'PM':'bg-purple-400', 'lead-developer':'bg-blue-400', 'developer':'bg-cyan-400',
+        'code-reviewer':'bg-yellow-400', 'qa-engineer':'bg-green-400',
+        'build-agent':'bg-orange-400', 'repo-manager':'bg-pink-400' }[role] || 'bg-gray-400';
     },
 
     eventColor(type) {
-      return {
-        stage_changed:  'text-indigo-400 font-semibold',
-        agent_started:  'text-cyan-400',
-        agent_message:  'text-gray-300',
-        run_completed:  'text-green-400',
-      }[type] || 'text-gray-500';
+      return { stage_changed:'text-indigo-400 font-semibold', agent_started:'text-cyan-400',
+        agent_message:'text-gray-300', run_completed:'text-green-400' }[type] || 'text-gray-500';
     },
 
     formatEvent(evt) {
       switch (evt.type) {
-        case 'stage_changed':  return `▶ ${evt.stage}`;
-        case 'agent_started':  return `→ [${(evt.role || '').toUpperCase()}]`;
-        case 'agent_message':  return `  ${(evt.text || '').slice(0, 120)}`;
-        case 'run_completed':  return `✓ Run ${evt.status}`;
+        case 'stage_changed': return '▶ ' + evt.stage;
+        case 'agent_started': return '→ [' + (evt.role || '').toUpperCase() + ']';
+        case 'agent_message': return '  ' + (evt.text || '').slice(0, 120);
+        case 'run_completed': return '✓ Run ' + evt.status;
         default: return JSON.stringify(evt).slice(0, 100);
       }
     },
 
     fmtDate(iso) {
       if (!iso) return '—';
-      try {
-        return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-      } catch { return iso; }
+      try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }); }
+      catch { return iso; }
     },
 
-    // ── Agent animation helpers ───────────────────────────────
     fmtElapsed(secs) {
       const m = Math.floor(secs / 60);
       const s = secs % 60;
-      return `${m}:${String(s).padStart(2, '0')}`;
+      return m + ':' + String(s).padStart(2, '0');
     },
 
     agentLabel(role) {
-      return {
-        'lead-developer': 'Lead Dev',
-        'developer':      'Developer',
-        'code-reviewer':  'Reviewer',
-        'qa-engineer':    'QA',
-        'build-agent':    'Build',
-        'repo-manager':   'Repo Mgr',
-        'PM':             'PM',
-      }[role] || role;
+      return { 'lead-developer':'Lead Dev', 'developer':'Developer', 'code-reviewer':'Reviewer',
+        'qa-engineer':'QA', 'build-agent':'Build', 'repo-manager':'Repo Mgr', 'PM':'PM' }[role] || role;
     },
 
-    agentInitial(role) {
-      return this.agentLabel(role).charAt(0).toUpperCase();
-    },
+    agentInitial(role) { return this.agentLabel(role).charAt(0).toUpperCase(); },
 
     roleTextColor(role) {
-      return {
-        'lead-developer': 'text-blue-300',
-        'developer':      'text-cyan-300',
-        'code-reviewer':  'text-yellow-300',
-        'qa-engineer':    'text-green-300',
-        'build-agent':    'text-orange-300',
-        'repo-manager':   'text-pink-300',
-        'PM':             'text-purple-300',
-      }[role] || 'text-gray-300';
+      return { 'lead-developer':'text-blue-300', 'developer':'text-cyan-300', 'code-reviewer':'text-yellow-300',
+        'qa-engineer':'text-green-300', 'build-agent':'text-orange-300', 'repo-manager':'text-pink-300',
+        'PM':'text-purple-300' }[role] || 'text-gray-300';
     },
 
     roleBorderColor(role) {
-      return {
-        'lead-developer': 'border-blue-400',
-        'developer':      'border-cyan-400',
-        'code-reviewer':  'border-yellow-400',
-        'qa-engineer':    'border-green-400',
-        'build-agent':    'border-orange-400',
-        'repo-manager':   'border-pink-400',
-        'PM':             'border-purple-400',
-      }[role] || 'border-gray-400';
+      return { 'lead-developer':'border-blue-400', 'developer':'border-cyan-400', 'code-reviewer':'border-yellow-400',
+        'qa-engineer':'border-green-400', 'build-agent':'border-orange-400', 'repo-manager':'border-pink-400',
+        'PM':'border-purple-400' }[role] || 'border-gray-400';
     },
 
     roleSolidBg(role) {
-      return {
-        'lead-developer': 'bg-blue-600',
-        'developer':      'bg-cyan-600',
-        'code-reviewer':  'bg-yellow-600',
-        'qa-engineer':    'bg-green-600',
-        'build-agent':    'bg-orange-600',
-        'repo-manager':   'bg-pink-600',
-        'PM':             'bg-purple-600',
-      }[role] || 'bg-gray-600';
+      return { 'lead-developer':'bg-blue-600', 'developer':'bg-cyan-600', 'code-reviewer':'bg-yellow-600',
+        'qa-engineer':'bg-green-600', 'build-agent':'bg-orange-600', 'repo-manager':'bg-pink-600',
+        'PM':'bg-purple-600' }[role] || 'bg-gray-600';
     },
 
     rolePillColor(role) {
-      return {
-        'lead-developer': 'bg-blue-700 text-blue-100',
-        'developer':      'bg-cyan-700 text-cyan-100',
-        'code-reviewer':  'bg-yellow-700 text-yellow-100',
-        'qa-engineer':    'bg-green-700 text-green-100',
-        'build-agent':    'bg-orange-700 text-orange-100',
-        'repo-manager':   'bg-pink-700 text-pink-100',
-        'PM':             'bg-purple-700 text-purple-100',
-      }[role] || 'bg-gray-700 text-gray-100';
+      return { 'lead-developer':'bg-blue-700 text-blue-100', 'developer':'bg-cyan-700 text-cyan-100',
+        'code-reviewer':'bg-yellow-700 text-yellow-100', 'qa-engineer':'bg-green-700 text-green-100',
+        'build-agent':'bg-orange-700 text-orange-100', 'repo-manager':'bg-pink-700 text-pink-100',
+        'PM':'bg-purple-700 text-purple-100' }[role] || 'bg-gray-700 text-gray-100';
     },
 
-    // Map fine-grained stage labels to 4 major groups for the graph
+    // ── Execution Graph Helpers (live dashboard banner) ──────
+    completedAgentCount() {
+      let n = 0;
+      for (const grp of this.liveExecutionGraph()) for (const a of grp.agents) if (a.endAt !== null) n++;
+      return n;
+    },
+    runningAgentCount() {
+      let n = 0;
+      for (const grp of this.liveExecutionGraph()) for (const a of grp.agents) if (a.endAt === null) n++;
+      return n;
+    },
+    totalAgentCount() {
+      let n = 0;
+      for (const grp of this.liveExecutionGraph()) n += grp.agents.length;
+      return n;
+    },
+    fmtShortDuration(ms) {
+      if (!ms || ms < 0) return '';
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60);
+      const sec = s % 60;
+      return m + 'm' + (sec ? ' ' + sec + 's' : '');
+    },
+    get runElapsed() {
+      if (!this.agentHistory.length) return 0;
+      const start = this.agentHistory[0].startAt;
+      if (!start) return this.agentElapsed;
+      return Math.floor((Date.now() - start) / 1000);
+    },
+
     majorStageLabel(stage) {
       if (!stage) return 'Start';
-      if (/^Stage 1/i.test(stage) || /^Design/i.test(stage))          return 'Design';
-      if (/^Stage 2/i.test(stage) || /^Implementation/i.test(stage))  return 'Implement';
-      if (/^Stage 3/i.test(stage) || /^CI\s/i.test(stage))            return 'Commit & CI';
-      if (/^Stage 4/i.test(stage) || /^PR\s/i.test(stage))            return 'PR Review';
+      if (/^Stage 1/i.test(stage) || /^Design/i.test(stage)) return 'Design';
+      if (/^Stage 2/i.test(stage) || /^Implementation/i.test(stage)) return 'Implement';
+      if (/^Stage 3/i.test(stage) || /^CI\s/i.test(stage)) return 'Commit & CI';
+      if (/^Stage 4/i.test(stage) || /^PR\s/i.test(stage)) return 'PR Review';
       return stage;
     },
 
-    // Build graph from live agentHistory (for active-run banner)
     liveExecutionGraph() {
       const map = new Map();
       const order = [];
@@ -1559,7 +1893,6 @@ function app() {
       return order.map(k => ({ label: k, agents: map.get(k) }));
     },
 
-    // Build graph from runDetail.events (for run detail view)
     buildExecutionGraph() {
       const map = new Map();
       const order = [];
@@ -1571,16 +1904,13 @@ function app() {
           const key = this.majorStageLabel(stageName) || 'Start';
           if (!map.has(key)) { map.set(key, []); order.push(key); }
           const agents = map.get(key);
-          // Mark previous entry done
           if (agents.length > 0) agents[agents.length - 1].running = false;
           agents.push({ role: evt.role, running: false });
         }
       }
-      // Mark last node running if pipeline is live
       if (isLive && order.length > 0) {
         const lastGroup = map.get(order[order.length - 1]);
-        if (lastGroup && lastGroup.length > 0)
-          lastGroup[lastGroup.length - 1].running = true;
+        if (lastGroup && lastGroup.length > 0) lastGroup[lastGroup.length - 1].running = true;
       }
       return order.map(k => ({ label: k, agents: map.get(k) }));
     },

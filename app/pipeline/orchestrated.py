@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from ..models import (
@@ -18,6 +21,22 @@ from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, Ope
 from .helpers import _reviewer_prompt, _extract_comment_ids
 
 
+def _write_agent_log(log_dir: str, role: str, prompt: str, lines: list[str], result: str, elapsed_ms: int) -> None:
+    """Append one agent call's I/O to logs/{run_id}/{role}.log."""
+    try:
+        log_path = Path(log_dir) / f"{role}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n{'─' * 60}\n")
+            fh.write(f"[{ts}] PROMPT ({elapsed_ms}ms):\n{prompt[:800]}\n\n")
+            if lines:
+                fh.write("STREAM:\n" + "\n".join(lines) + "\n\n")
+            fh.write(f"RESULT:\n{result}\n")
+    except Exception:
+        pass  # never crash the pipeline over logging
+
+
 async def run_pipeline_orchestrated(
     task: str,
     settings: AppSettings,
@@ -26,6 +45,7 @@ async def run_pipeline_orchestrated(
     on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
+    log_dir: str | None = None,
 ) -> str:
     """Orchestration driven entirely by Python — no PM LLM, deterministic loops."""
 
@@ -82,11 +102,21 @@ async def run_pipeline_orchestrated(
             return eng, model, cfg.model_config, cfg.mcp_servers
 
     async def call(role: str, prompt: str) -> str:
-        await on_event({"type": "agent_started", "role": role})
+        action = prompt[:120].strip().replace("\n", " ")
+        t0 = time.monotonic()
+        await on_event({"type": "agent_started", "role": role, "action": action})
         system_prompt, tools, _ = AGENT_CONFIGS[role]
         eng, model, model_config, mcp_servers = _resolve(role)
+
+        # Intercept messages to write per-agent log file
+        log_lines: list[str] = []
+        async def _forwarding_on_event(evt: dict) -> None:
+            if evt.get("type") == "agent_message":
+                log_lines.append(evt.get("text", ""))
+            await on_event(evt)
+
         try:
-            return await eng.run(
+            result = await eng.run(
                 role=role,
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -94,13 +124,25 @@ async def run_pipeline_orchestrated(
                 model=model,
                 model_config=model_config,
                 mcp_servers=mcp_servers,
-                on_event=on_event,
+                on_event=_forwarding_on_event,
             )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            summary = result[:300].strip() if result else ""
+            await on_event({"type": "agent_completed", "role": role, "success": True, "elapsed_ms": elapsed_ms, "summary": summary})
+            # Write per-agent log
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, result, elapsed_ms)
+            return result
         except Exception as e:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            err_msg = str(e)[:300]
+            await on_event({"type": "agent_completed", "role": role, "success": False, "elapsed_ms": elapsed_ms, "summary": err_msg})
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, f"ERROR: {e}", elapsed_ms)
             raise RuntimeError(f"Agent '{role}' failed: {e}") from e
 
-    async def stage(label: str) -> None:
-        await on_event({"type": "stage_changed", "stage": label})
+    async def stage(label: str, cycle: int | None = None) -> None:
+        await on_event({"type": "stage_changed", "stage": label, "cycle": cycle})
 
     try:
         completed_stage = (checkpoint or {}).get("completed_stage", 0)
@@ -112,11 +154,11 @@ async def run_pipeline_orchestrated(
 
         if not pr_url and completed_stage < 1:
             # ── Stage 1: Design Loop ──────────────────────────────────────────────────
-            await stage("Stage 1")
+            await stage("Stage 1: Design", cycle=0)
             plan = await call("lead-developer", task)
 
             for i in range(settings.max_design_cycles):
-                await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}")
+                await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
                 qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
                 if "APPROVED" in qa_result.upper():
                     break
@@ -163,12 +205,12 @@ async def run_pipeline_orchestrated(
 
         if not pr_url and completed_stage < 3:
             # ── Stage 2: Implementation Loop ─────────────────────────────────────────
-            await stage("Stage 2")
+            await stage("Stage 2: Implementation", cycle=0)
             findings = ""
             already_approved: set[str] = set()
 
             for impl_cycle in range(settings.max_impl_cycles):
-                await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}")
+                await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}", cycle=impl_cycle + 1)
 
                 impl_prompt = (
                     plan if not findings
@@ -240,7 +282,7 @@ async def run_pipeline_orchestrated(
                     break
 
             # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
-            await stage("Stage 3")
+            await stage("Stage 3: Commit & PR", cycle=0)
             pr_result = await call(
                 "repo-manager",
                 f"Commit all changes and create a Pull Request.\n"
@@ -265,7 +307,7 @@ async def run_pipeline_orchestrated(
 
         # ── Stage 3b: CI Check Polling ────────────────────────────────────────────
         for ci_cycle in range(settings.max_pr_cycles):
-            await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}")
+            await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}", cycle=ci_cycle + 1)
             check_result = await call("repo-manager", "POLL CI CHECKS")
             if "CHECKS PASSING" in check_result.upper():
                 break
@@ -280,10 +322,10 @@ async def run_pipeline_orchestrated(
             last_diff = await call("repo-manager", "PUSH CHANGES")
 
         # ── Stage 4: PR Poll Loop ─────────────────────────────────────────────────
-        await stage("Stage 4")
+        await stage("Stage 4: PR Poll", cycle=0)
 
         for pr_cycle in range(settings.max_pr_cycles):
-            await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}")
+            await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}", cycle=pr_cycle + 1)
 
             exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
             poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")

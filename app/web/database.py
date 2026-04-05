@@ -61,10 +61,20 @@ class OLamoDb:
             );
 
             CREATE TABLE IF NOT EXISTS events (
-                seq    INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                ts     TEXT NOT NULL,
-                data   TEXT NOT NULL,
+                seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id       TEXT NOT NULL,
+                ts           TEXT NOT NULL,
+                data         TEXT NOT NULL,
+                type         TEXT,
+                stage        TEXT,
+                cycle        INTEGER,
+                role         TEXT,
+                action       TEXT,
+                success      INTEGER,
+                elapsed_ms   INTEGER,
+                summary      TEXT,
+                content_path TEXT,
+                pr_url       TEXT,
                 FOREIGN KEY (run_id) REFERENCES runs(id)
             );
             CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, seq);
@@ -74,24 +84,35 @@ class OLamoDb:
                 current_stage   TEXT,
                 current_cycle   TEXT,
                 last_agent      TEXT,
+                last_agent_ok   INTEGER,
+                last_summary    TEXT,
                 checkpoint_data TEXT,
                 updated_at      TEXT,
                 FOREIGN KEY (run_id) REFERENCES runs(id)
             );
         """)
-        # Migrate existing run_state tables that may be missing the new columns
-        try:
-            await self._conn.execute("ALTER TABLE run_state ADD COLUMN current_cycle TEXT")
-        except Exception:
-            pass  # column already exists
-        try:
-            await self._conn.execute("ALTER TABLE run_state ADD COLUMN last_agent TEXT")
-        except Exception:
-            pass  # column already exists
-        try:
-            await self._conn.execute("ALTER TABLE run_state ADD COLUMN checkpoint_data TEXT")
-        except Exception:
-            pass  # column already exists
+        # Migrate existing tables that may be missing newer columns
+        for col in [
+            "ALTER TABLE run_state ADD COLUMN current_cycle TEXT",
+            "ALTER TABLE run_state ADD COLUMN last_agent TEXT",
+            "ALTER TABLE run_state ADD COLUMN last_agent_ok INTEGER",
+            "ALTER TABLE run_state ADD COLUMN last_summary TEXT",
+            "ALTER TABLE run_state ADD COLUMN checkpoint_data TEXT",
+            "ALTER TABLE events ADD COLUMN type TEXT",
+            "ALTER TABLE events ADD COLUMN stage TEXT",
+            "ALTER TABLE events ADD COLUMN cycle INTEGER",
+            "ALTER TABLE events ADD COLUMN role TEXT",
+            "ALTER TABLE events ADD COLUMN action TEXT",
+            "ALTER TABLE events ADD COLUMN success INTEGER",
+            "ALTER TABLE events ADD COLUMN elapsed_ms INTEGER",
+            "ALTER TABLE events ADD COLUMN summary TEXT",
+            "ALTER TABLE events ADD COLUMN content_path TEXT",
+            "ALTER TABLE events ADD COLUMN pr_url TEXT",
+        ]:
+            try:
+                await self._conn.execute(col)
+            except Exception:
+                pass
         await self._conn.commit()
 
     def _row_to_run(self, row: "aiosqlite.Row") -> "RunRecord":  # type: ignore
@@ -137,18 +158,81 @@ class OLamoDb:
 
     async def insert_event(self, run_id: str, data: dict) -> int:
         ts = datetime.now(timezone.utc).isoformat()
+        success_val = None
+        if "success" in data:
+            success_val = 1 if data["success"] else 0
         cur = await self._conn.execute(
-            "INSERT INTO events (run_id, ts, data) VALUES (?, ?, ?)",
-            (run_id, ts, json.dumps(data)),
+            """INSERT INTO events
+               (run_id, ts, data, type, stage, cycle, role, action, success, elapsed_ms, summary, content_path, pr_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id, ts, json.dumps(data),
+                data.get("type"), data.get("stage"), data.get("cycle"),
+                data.get("role"), data.get("action"),
+                success_val,
+                data.get("elapsed_ms"), data.get("summary"),
+                data.get("content_path"), data.get("pr_url"),
+            ),
         )
         await self._conn.commit()
-        return cur.lastrowid  # equivalent to OLaCo's last_insert_rowid()
+        return cur.lastrowid  # seq assigned by DB
 
     async def get_events(self, run_id: str) -> list[dict]:
+        """Return all events for a run, each augmented with its seq and ts."""
         async with self._conn.execute(
-            "SELECT data FROM events WHERE run_id=? ORDER BY seq", (run_id,)
+            "SELECT seq, ts, data FROM events WHERE run_id=? ORDER BY seq", (run_id,)
         ) as cur:
-            return [json.loads(row["data"]) async for row in cur]
+            results = []
+            async for row in cur:
+                event = json.loads(row["data"])
+                event["seq"] = row["seq"]
+                event["ts"] = row["ts"]
+                results.append(event)
+            return results
+
+    async def get_events_since(self, run_id: str, after_seq: int) -> list[dict]:
+        """Return events with seq > after_seq (for SSE gap-fill on reconnect)."""
+        async with self._conn.execute(
+            "SELECT seq, ts, data FROM events WHERE run_id=? AND seq > ? ORDER BY seq",
+            (run_id, after_seq),
+        ) as cur:
+            results = []
+            async for row in cur:
+                event = json.loads(row["data"])
+                event["seq"] = row["seq"]
+                event["ts"] = row["ts"]
+                results.append(event)
+            return results
+
+    async def get_events_since_global(self, after_seq: int) -> list[dict]:
+        """Return all events across all runs with seq > after_seq (for SSE gap-fill)."""
+        async with self._conn.execute(
+            "SELECT seq, ts, data FROM events WHERE seq > ? ORDER BY seq",
+            (after_seq,),
+        ) as cur:
+            results = []
+            async for row in cur:
+                event = json.loads(row["data"])
+                event["seq"] = row["seq"]
+                event["ts"] = row["ts"]
+                results.append(event)
+            return results
+
+    async def get_event_content_path(self, run_id: str, seq: int) -> str | None:
+        """Return the content_path for a specific event (e.g. spec markdown file)."""
+        async with self._conn.execute(
+            "SELECT content_path FROM events WHERE run_id=? AND seq=?", (run_id, seq)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["content_path"] if row else None
+
+    async def update_event_content_path(self, run_id: str, seq: int, content_path: str) -> None:
+        """Update the content_path for an already-inserted event."""
+        await self._conn.execute(
+            "UPDATE events SET content_path=? WHERE run_id=? AND seq=?",
+            (content_path, run_id, seq),
+        )
+        await self._conn.commit()
 
     async def upsert_run_state(
         self,
@@ -156,25 +240,30 @@ class OLamoDb:
         current_stage: str | None = None,
         current_cycle: str | None = None,
         last_agent: str | None = None,
+        last_agent_ok: bool | None = None,
+        last_summary: str | None = None,
     ) -> None:
         ts = datetime.now(timezone.utc).isoformat()
+        ok_val = None if last_agent_ok is None else (1 if last_agent_ok else 0)
         await self._conn.execute(
             """
-            INSERT INTO run_state (run_id, current_stage, current_cycle, last_agent, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO run_state (run_id, current_stage, current_cycle, last_agent, last_agent_ok, last_summary, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO UPDATE SET
                 current_stage = COALESCE(excluded.current_stage, current_stage),
                 current_cycle = COALESCE(excluded.current_cycle, current_cycle),
                 last_agent    = COALESCE(excluded.last_agent, last_agent),
+                last_agent_ok = COALESCE(excluded.last_agent_ok, last_agent_ok),
+                last_summary  = COALESCE(excluded.last_summary, last_summary),
                 updated_at    = excluded.updated_at
             """,
-            (run_id, current_stage, current_cycle, last_agent, ts),
+            (run_id, current_stage, current_cycle, last_agent, ok_val, last_summary, ts),
         )
         await self._conn.commit()
 
     async def get_run_state(self, run_id: str) -> dict | None:
         async with self._conn.execute(
-            "SELECT run_id, current_stage, current_cycle, last_agent, checkpoint_data, updated_at FROM run_state WHERE run_id=?",
+            "SELECT run_id, current_stage, current_cycle, last_agent, last_agent_ok, last_summary, checkpoint_data, updated_at FROM run_state WHERE run_id=?",
             (run_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -185,6 +274,8 @@ class OLamoDb:
             "current_stage": row["current_stage"],
             "current_cycle": row["current_cycle"],
             "last_agent": row["last_agent"],
+            "last_agent_ok": bool(row["last_agent_ok"]) if row["last_agent_ok"] is not None else None,
+            "last_summary": row["last_summary"],
             "checkpoint_data": row["checkpoint_data"],
             "updated_at": row["updated_at"],
         }

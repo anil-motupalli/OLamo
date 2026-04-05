@@ -22,11 +22,13 @@ async def run_pipeline(
     on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
+    log_dir: str | None = None,
 ) -> str:
     if settings.orchestration_mode == "orchestrated":
         return await run_pipeline_orchestrated(
             task, settings, on_event, pr_url, on_approval_required,
             checkpoint=checkpoint, save_checkpoint=save_checkpoint,
+            log_dir=log_dir,
         )
     return await run_pipeline_pm(task, settings, on_event, pr_url, on_approval_required)
 

@@ -1051,7 +1051,7 @@ async def run_pipeline(
     return await run_pipeline_pm(task, settings, on_event, pr_url, on_approval_required)
 
 
-async def run_pipeline_cli(task: str, pr_url: str = "") -> None:
+async def run_pipeline_cli(task: str, pr_url: str = "", settings_file: Path | None = None) -> None:
     print(f"\n{'=' * 60}")
     print("OLamo Development Pipeline")
     print(f"{'=' * 60}")
@@ -1080,7 +1080,8 @@ async def run_pipeline_cli(task: str, pr_url: str = "") -> None:
         return {"approved": False, "feedback": response}
 
     try:
-        result = await run_pipeline(task, AppSettings(), on_event, pr_url=pr_url, on_approval_required=on_approval_required)
+        settings = SettingsStore(settings_file=settings_file).settings
+        result = await run_pipeline(task, settings, on_event, pr_url=pr_url, on_approval_required=on_approval_required)
         print(f"\n{'=' * 60}")
         print("Pipeline Complete")
         print(f"{'=' * 60}")
@@ -1101,11 +1102,62 @@ async def run_pipeline_cli(task: str, pr_url: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 class SettingsStore:
-    def __init__(self) -> None:
-        self._settings = AppSettings()
+    _SETTINGS_FILE = Path("olamo-settings.json")
+
+    def __init__(self, settings_file: Path | None = None) -> None:
+        if settings_file is not None:
+            self._SETTINGS_FILE = settings_file
+        self._settings = self._load()
         self._locked = False
         self._pending: AppSettings | None = None
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _strip_jsonc_comments(text: str) -> str:
+        """Strip // line comments and /* block comments */ from JSONC text."""
+        result: list[str] = []
+        i = 0
+        in_string = False
+        while i < len(text):
+            if in_string:
+                result.append(text[i])
+                if text[i] == '\\':
+                    i += 1
+                    if i < len(text):
+                        result.append(text[i])
+                elif text[i] == '"':
+                    in_string = False
+                i += 1
+            elif text[i] == '"':
+                in_string = True
+                result.append(text[i])
+                i += 1
+            elif text[i:i+2] == '//':
+                # Skip until end of line
+                i = text.find('\n', i)
+                if i == -1:
+                    break
+            elif text[i:i+2] == '/*':
+                end = text.find('*/', i + 2)
+                i = end + 2 if end != -1 else len(text)
+            else:
+                result.append(text[i])
+                i += 1
+        return ''.join(result)
+
+    def _load(self) -> AppSettings:
+        if self._SETTINGS_FILE.exists():
+            try:
+                raw = self._SETTINGS_FILE.read_text()
+                cleaned = self._strip_jsonc_comments(raw)
+                data = json.loads(cleaned)
+                return _settings_from_dict(data)
+            except Exception:
+                pass
+        return AppSettings()
+
+    def _save(self) -> None:
+        self._SETTINGS_FILE.write_text(json.dumps(asdict(self._settings), indent=2))
 
     @property
     def settings(self) -> AppSettings:
@@ -1125,6 +1177,7 @@ class SettingsStore:
             if self._pending is not None:
                 self._settings = self._pending
                 self._pending = None
+                self._save()
 
     async def try_update(self, new_settings: AppSettings) -> bool:
         async with self._lock:
@@ -1132,6 +1185,7 @@ class SettingsStore:
                 self._pending = new_settings
                 return False
             self._settings = new_settings
+            self._save()
             return True
 
 
@@ -1449,7 +1503,7 @@ def _run_gh(args: list[str]) -> dict:
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-def create_app():  # noqa: ANN201
+def create_app(settings_file: Path | None = None):  # noqa: ANN201
     try:
         from contextlib import asynccontextmanager
 
@@ -1463,7 +1517,7 @@ def create_app():  # noqa: ANN201
         ) from exc
 
     broadcaster = SseBroadcaster()
-    store = SettingsStore()
+    store = SettingsStore(settings_file=settings_file)
     manager = RunManager(broadcaster, store)
     static_dir = Path(__file__).parent / "static"
 
@@ -1697,7 +1751,10 @@ def main() -> None:
     parser.add_argument("--server", action="store_true", help="Run web server")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--pr-url", default="", help="Existing PR URL — skip Stages 1-3 and resume from CI check poll")
+    parser.add_argument("--settings", default=None, help="Path to settings JSON file (default: olamo-settings.json)")
     args = parser.parse_args()
+
+    settings_file = Path(args.settings) if args.settings else None
 
     if args.server:
         try:
@@ -1706,7 +1763,7 @@ def main() -> None:
             print("uvicorn not installed. Run: pip install uvicorn[standard]")
             sys.exit(1)
         print(f"Starting OLamo server on http://0.0.0.0:{args.port}")
-        uvicorn.run(create_app(), host="0.0.0.0", port=args.port)
+        uvicorn.run(create_app(settings_file=settings_file), host="0.0.0.0", port=args.port)
         return
 
     if args.task:
@@ -1717,7 +1774,7 @@ def main() -> None:
             print("No task provided. Exiting.")
             sys.exit(1)
 
-    asyncio.run(run_pipeline_cli(task, pr_url=args.pr_url))
+    asyncio.run(run_pipeline_cli(task, pr_url=args.pr_url, settings_file=settings_file))
 
 
 if __name__ == "__main__":

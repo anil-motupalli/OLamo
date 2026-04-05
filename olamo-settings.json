@@ -1,0 +1,14 @@
+{
+  "pm_model": "opus",
+  "opus_model": "opus",
+  "sonnet_model": "sonnet",
+  "haiku_model": "haiku",
+  "max_design_cycles": 2,
+  "max_build_cycles": 3,
+  "max_impl_cycles": 3,
+  "max_pr_cycles": 2,
+  "api_base_url": "",
+  "orchestration_mode": "pm",
+  "agent_configs": {},
+  "copilot_github_token": ""
+}

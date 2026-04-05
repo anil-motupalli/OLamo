@@ -39,22 +39,34 @@ class RunManager:
         self.pending_approvals: dict[str, ApprovalGate] = {}
 
     async def setup(self) -> None:
-        """Open DB, ensure schema, recover stale runs.
+        """Open DB, ensure schema, surface stale runs.
 
-        - ``running`` tasks from a crashed session → reset to ``queued`` and
-          resumed from their last checkpoint.
-        - ``queued`` tasks that never started → spawned immediately.
+        Tasks that were ``running`` when the server last stopped become
+        ``interrupted`` — they can be resumed manually via ``resume()``.
+        Tasks that were ``queued`` but never started are left as-is; they
+        will be picked up automatically once the server is healthy.
         """
         await self._db.open()
         for run in await self._db.get_all_runs():
             self._runs[run.id] = run
             if run.status == RunStatus.RUNNING:
-                # Reset to queued so the worker will pick it up and resume
-                run.status = RunStatus.QUEUED
-                run.started_at = None
+                run.status = RunStatus.INTERRUPTED
                 await self._db.upsert_run(run)
-            if run.status == RunStatus.QUEUED:
+                await self._db.upsert_run_state(run.id, current_stage="interrupted")
+            elif run.status == RunStatus.QUEUED:
                 self._spawn(run)
+
+    async def resume(self, run_id: str) -> RunRecord | None:
+        """Re-queue an interrupted run so it resumes from its last checkpoint."""
+        run = self._runs.get(run_id)
+        if run is None or run.status != RunStatus.INTERRUPTED:
+            return None
+        run.status = RunStatus.QUEUED
+        run.started_at = None
+        run.error = None
+        await self._db.upsert_run(run)
+        self._spawn(run)
+        return run
 
     async def close(self) -> None:
         # Cancel all active tasks cleanly

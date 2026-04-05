@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..models import (
     AppSettings,
+    RunStatus,
     _settings_from_dict,
     _COPILOT_DEFAULTS,
     _CLAUDE_TIER,
@@ -87,6 +88,18 @@ def create_app(settings_file: Path | None = None):  # noqa: ANN201
         if run is None:
             raise HTTPException(status_code=404, detail="run not found")
         return asdict(run)
+
+    @app.post("/api/runs/{run_id}/resume")
+    async def resume_run(run_id: str) -> dict:
+        run = manager.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if run.status != RunStatus.INTERRUPTED:
+            raise HTTPException(status_code=409, detail=f"run is {run.status.value}, not interrupted")
+        resumed = await manager.resume(run_id)
+        if resumed is None:
+            raise HTTPException(status_code=409, detail="could not resume run")
+        return asdict(resumed)
 
     @app.get("/api/runs/{run_id}/approval")
     async def get_approval(run_id: str) -> dict:

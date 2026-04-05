@@ -115,8 +115,8 @@ class TestRunManager:
         assert run_manager.pending_approvals == {}
 
     @pytest.mark.asyncio
-    async def test_setup_resets_stale_running_to_queued(self, tmp_path, monkeypatch):
-        """Stale 'running' tasks from a crashed session are reset to 'queued' for resumption (not failed)."""
+    async def test_setup_resets_stale_running_to_interrupted(self, tmp_path, monkeypatch):
+        """Stale 'running' tasks from a crashed session become 'interrupted' — not auto-resumed."""
         monkeypatch.chdir(tmp_path)
         db_path = str(tmp_path / "shared.db")
 
@@ -132,14 +132,11 @@ class TestRunManager:
         mgr2 = RunManager(SseBroadcaster(), SettingsStore(), db_path=db_path)
         await mgr2.setup()
         found = mgr2.get_run(run.id)
-        # Capture status before close() may mutate the run object via the spawned task
         found_status = found.status if found else None
-        found_error = found.error if found else "unknown"
         await mgr2.close()
 
         assert found is not None
-        assert found_status == RunStatus.QUEUED, "Stale running task must be reset to queued (not failed)"
-        assert found_error is None, "Stale running task must not be marked as failed"
+        assert found_status == RunStatus.INTERRUPTED, "Stale running task must become 'interrupted'"
 
     @pytest.mark.asyncio
     async def test_multiple_tasks_spawned_concurrently(self, tmp_path, monkeypatch):

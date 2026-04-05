@@ -97,7 +97,12 @@
                     <td class="px-4 py-3 text-gray-500 text-xs hidden md:table-cell" x-text="fmtDate(run.queued_at)"></td>
                     <td class="px-4 py-3 text-gray-500 text-xs hidden md:table-cell" x-text="run.completed_at ? fmtDate(run.completed_at) : '—'"></td>
                     <td class="px-4 py-3">
-                      <button @click="openRun(run.id)" class="text-xs text-indigo-400 hover:text-indigo-300">Detail →</button>
+                      <div class="flex items-center gap-2">
+                        <button @click="openRun(run.id)" class="text-xs text-indigo-400 hover:text-indigo-300">Detail →</button>
+                        <template x-if="run.status === 'interrupted'">
+                          <button @click="resumeRun(run.id)" class="text-xs text-yellow-400 hover:text-yellow-300 font-semibold">▶ Resume</button>
+                        </template>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -364,6 +369,12 @@
         <h1 class="text-xl font-bold" x-text="selectedRun ? selectedRun.description : 'Run Detail'"></h1>
         <template x-if="selectedRun">
           <span :class="statusBadge(selectedRun.status)" class="px-2 py-0.5 rounded text-xs font-semibold" x-text="selectedRun.status"></span>
+        </template>
+        <template x-if="selectedRun && selectedRun.status === 'interrupted'">
+          <button @click="resumeRun(selectedRun.id)"
+            class="ml-auto px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-yellow-100 text-xs font-semibold rounded transition-colors">
+            ▶ Resume from checkpoint
+          </button>
         </template>
       </div>
 
@@ -849,6 +860,23 @@ function app() {
     },
 
     // ── Submit ───────────────────────────────────────────────
+    async resumeRun(runId) {
+      try {
+        const res = await fetch(`/api/runs/${runId}/resume`, { method: 'POST' });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          alert(`Resume failed: ${d.detail || res.statusText}`);
+          return;
+        }
+        await this.loadRuns();
+        if (this.selectedRun && this.selectedRun.id === runId) {
+          await this.openRun(runId);
+        }
+      } catch (e) {
+        alert(`Resume error: ${e.message}`);
+      }
+    },
+
     async submitTask() {
       this.submitError = '';
       this.submitOk = false;
@@ -1200,10 +1228,11 @@ function app() {
     // ── Helpers ──────────────────────────────────────────────
     statusBadge(status) {
       return {
-        queued:    'bg-gray-700 text-gray-300',
-        running:   'bg-indigo-700 text-indigo-200',
-        completed: 'bg-green-800 text-green-200',
-        failed:    'bg-red-800 text-red-200',
+        queued:      'bg-gray-700 text-gray-300',
+        running:     'bg-indigo-700 text-indigo-200',
+        interrupted: 'bg-yellow-800 text-yellow-200',
+        completed:   'bg-green-800 text-green-200',
+        failed:      'bg-red-800 text-red-200',
       }[status] || 'bg-gray-700 text-gray-300';
     },
 

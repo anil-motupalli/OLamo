@@ -1,0 +1,49 @@
+{
+  "models": {
+    "opus": "opus",
+    "sonnet": "sonnet",
+    "haiku": "haiku",
+    "pm": "sonnet"
+  },
+  "pipeline": {
+    "max_design_cycles": 2,
+    "max_build_cycles": 3,
+    "max_impl_cycles": 3,
+    "max_pr_cycles": 2
+  },
+  "agents": {
+    "reviewers": ["code-reviewer", "qa-engineer", "lead-developer"],
+    "default_engines": {
+      "lead-developer": "claude",
+      "developer":      "claude",
+      "code-reviewer":  "copilot",
+      "qa-engineer":    "copilot",
+      "build-agent":    "copilot",
+      "repo-manager":   "copilot"
+    },
+    "claude_tiers": {
+      "lead-developer": "opus_model",
+      "developer":      "sonnet_model",
+      "code-reviewer":  "opus_model",
+      "qa-engineer":    "opus_model",
+      "build-agent":    "haiku_model",
+      "repo-manager":   "haiku_model"
+    },
+    "copilot_models": {
+      "lead-developer": "claude-opus-4-6",
+      "developer":      "claude-sonnet-4-6",
+      "code-reviewer":  "codex",
+      "qa-engineer":    "gpt-5.4",
+      "build-agent":    "gpt-5-mini",
+      "repo-manager":   "gpt-5-mini"
+    },
+    "tools": {
+      "lead-developer": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "developer":      ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+      "code-reviewer":  ["Read", "Glob", "Grep"],
+      "qa-engineer":    ["Read", "Bash", "Glob", "Grep"],
+      "build-agent":    ["Bash", "Read", "Glob"],
+      "repo-manager":   ["Bash", "Read"]
+    }
+  }
+}

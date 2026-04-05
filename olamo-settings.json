@@ -1,14 +1,61 @@
 {
   "pm_model": "opus",
-  "opus_model": "opus",
-  "sonnet_model": "sonnet",
-  "haiku_model": "haiku",
-  "max_design_cycles": 2,
-  "max_build_cycles": 3,
-  "max_impl_cycles": 3,
-  "max_pr_cycles": 2,
-  "api_base_url": "",
-  "orchestration_mode": "pm",
-  "agent_configs": {},
-  "copilot_github_token": ""
+  "orchestration_mode": "orchestrated",
+  "headless": false,
+  "agent_configs": {
+    "lead-developer": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5v-turbo",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    },
+    "developer": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5.1",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    },
+    "code-reviewer": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5.1",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    },
+    "qa-engineer": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5.1",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    },
+    "build-agent": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    },
+    "repo-manager": {
+      "engine": "openai",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX"
+      }
+    }
+  }
 }

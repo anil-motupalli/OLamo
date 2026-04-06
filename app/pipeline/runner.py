@@ -19,7 +19,7 @@ async def run_pipeline(
     settings: AppSettings,
     on_event: Callable[[dict], Awaitable[None]],
     pr_url: str = "",
-    on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
+    on_approval_required: Callable[[str, str], Awaitable[dict]] | None = None,
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
     log_dir: str | None = None,
@@ -55,10 +55,12 @@ async def run_pipeline_cli(
             print(f"[STAGE] {evt['stage']}")
             print(f"{'─' * 40}")
 
-    async def on_approval_required(plan: str) -> dict:
+    async def on_approval_required(plan: str, developer_response: str = "") -> dict:
         print(f"\n{'=' * 60}")
         print("AWAITING DESIGN APPROVAL")
         print(f"{'=' * 60}")
+        if developer_response:
+            print(f"[Developer revised]: {developer_response[:200]}\n")
         print(plan)
         print("\nEnter 'APPROVED' or type feedback to refine:")
         response = input("> ").strip()

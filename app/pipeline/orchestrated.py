@@ -42,7 +42,7 @@ async def run_pipeline_orchestrated(
     settings: AppSettings,
     on_event: Callable[[dict], Awaitable[None]],
     pr_url: str = "",
-    on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
+    on_approval_required: Callable[[str, str], Awaitable[dict]] | None = None,
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
     log_dir: str | None = None,
@@ -172,8 +172,9 @@ async def run_pipeline_orchestrated(
 
             # Optional human approval gate after design loop — skipped in headless mode
             if on_approval_required is not None and not settings.headless:
+                dev_response = ""  # developer's response to show on subsequent rounds
                 while True:
-                    gate_result = await on_approval_required(plan)
+                    gate_result = await on_approval_required(plan, dev_response)
                     if gate_result.get("approved"):
                         break
                     feedback = gate_result.get("feedback", "")
@@ -192,6 +193,8 @@ async def run_pipeline_orchestrated(
                             f"Plan:\n{plan}\n\n"
                             f"Feedback:\n{feedback}{comment_text}",
                         )
+                        # Use the summary of the revised plan as developer response for the next round
+                        dev_response = plan[:300].strip()
 
             if save_checkpoint:
                 await save_checkpoint({

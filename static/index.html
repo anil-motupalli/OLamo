@@ -13,6 +13,8 @@
     .scrollbar-thin::-webkit-scrollbar { width: 4px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 9999px; }
+
+    /* ── Original Animations ──────────────────────────── */
     @keyframes agent-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .agent-spin { animation: agent-spin 1.6s linear infinite; }
     @keyframes pulse-ring { 0% { transform: scale(0.9); opacity: 0.8; } 50% { transform: scale(1.35); opacity: 0.2; } 100% { transform: scale(0.9); opacity: 0.8; } }
@@ -39,6 +41,122 @@
     .stage-active { animation: stage-pulse 2s ease-in-out infinite; }
     @keyframes gentle-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
     .gentle-float { animation: gentle-float 3s ease-in-out infinite; }
+
+    /* ── Enhanced Agent Animations ────────────────────── */
+    @keyframes radar-sweep {
+      0% { --sweep-angle: 0deg; }
+      100% { --sweep-angle: 360deg; }
+    }
+    .radar-sweep {
+      background: conic-gradient(from var(--sweep-angle, 0deg), transparent 0%, var(--agent-accent, rgba(99,102,241,0.35)) 20%, transparent 40%);
+      animation: radar-spin 3s linear infinite;
+    }
+    @keyframes radar-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .radar-spin { animation: radar-spin 3s linear infinite; }
+
+    @keyframes orbit-ring {
+      0% { transform: rotate(0deg) translateX(50%) rotate(0deg); }
+      100% { transform: rotate(360deg) translateX(50%) rotate(-360deg); }
+    }
+    .orbit-dot { animation: orbit-ring 4s linear infinite; }
+
+    @keyframes orbit-ring-reverse {
+      0% { transform: rotate(0deg) translateX(42%) rotate(0deg); }
+      100% { transform: rotate(-360deg) translateX(42%) rotate(360deg); }
+    }
+    .orbit-dot-reverse { animation: orbit-ring-reverse 5s linear infinite; }
+
+    @keyframes progress-ring-draw {
+      0% { stroke-dashoffset: 283; }
+      100% { stroke-dashoffset: 0; }
+    }
+
+    @keyframes typewriter-cursor {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    .type-cursor { animation: typewriter-cursor 1s step-end infinite; }
+
+    @keyframes pulse-glow-role {
+      0%, 100% { box-shadow: 0 0 8px 2px var(--agent-glow-color, rgba(99,102,241,0.25)), 0 0 20px 4px var(--agent-glow-color, rgba(99,102,241,0.08)); }
+      50% { box-shadow: 0 0 14px 4px var(--agent-glow-color, rgba(99,102,241,0.35)), 0 0 32px 8px var(--agent-glow-color, rgba(99,102,241,0.12)); }
+    }
+    .pulse-glow-role { animation: pulse-glow-role 2s ease-in-out infinite; }
+
+    @keyframes node-active-breathe {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.06); opacity: 0.9; }
+    }
+    .node-breathe { animation: node-active-breathe 2s ease-in-out infinite; }
+
+    @keyframes connection-pulse {
+      0% { stroke-opacity: 0.3; stroke-width: 1; }
+      50% { stroke-opacity: 1; stroke-width: 2.5; }
+      100% { stroke-opacity: 0.3; stroke-width: 1; }
+    }
+    .conn-pulse { animation: connection-pulse 1.5s ease-in-out infinite; }
+
+    @keyframes scan-line {
+      0% { top: 0%; opacity: 0; }
+      10% { opacity: 0.5; }
+      90% { opacity: 0.5; }
+      100% { top: 100%; opacity: 0; }
+    }
+    .scan-line { animation: scan-line 2.5s ease-in-out infinite; }
+
+    @keyframes ripple-out {
+      0% { transform: scale(0.8); opacity: 0.6; border-width: 2px; }
+      100% { transform: scale(2.2); opacity: 0; border-width: 0.5px; }
+    }
+    .ripple { animation: ripple-out 1.5s ease-out infinite; }
+
+    @keyframes float-particle {
+      0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.4; }
+      25% { transform: translate(3px, -6px) scale(1.2); opacity: 0.7; }
+      50% { transform: translate(-2px, -10px) scale(0.8); opacity: 0.5; }
+      75% { transform: translate(-5px, -3px) scale(1.1); opacity: 0.6; }
+    }
+    .particle { animation: float-particle 3s ease-in-out infinite; }
+    .particle:nth-child(2) { animation-delay: -1s; animation-duration: 3.5s; }
+    .particle:nth-child(3) { animation-delay: -2s; animation-duration: 2.8s; }
+
+    @keyframes waveform-bar {
+      0%, 100% { height: 4px; }
+      50% { height: 16px; }
+    }
+    .wf-bar-1 { animation: waveform-bar 0.6s ease-in-out infinite; }
+    .wf-bar-2 { animation: waveform-bar 0.6s ease-in-out infinite 0.1s; }
+    .wf-bar-3 { animation: waveform-bar 0.6s ease-in-out infinite 0.2s; }
+    .wf-bar-4 { animation: waveform-bar 0.6s ease-in-out infinite 0.3s; }
+    .wf-bar-5 { animation: waveform-bar 0.6s ease-in-out infinite 0.15s; }
+
+    @keyframes agent-card-enter {
+      0% { opacity: 0; transform: scale(0.92) translateY(6px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .agent-card-enter { animation: agent-card-enter 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+    @keyframes playhead-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.6); }
+      50% { box-shadow: 0 0 0 6px rgba(99,102,241,0); }
+    }
+    .playhead { animation: playhead-pulse 2s ease-in-out infinite; }
+
+    @keyframes stage-progress-fill {
+      from { width: 0%; }
+      to { width: var(--progress, 0%); }
+    }
+    .stage-progress-fill { animation: stage-progress-fill 0.8s ease-out forwards; }
+
+    @keyframes glow-border-track {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    .glow-border-track {
+      background: linear-gradient(90deg, transparent, var(--agent-accent, rgba(99,102,241,0.4)), transparent);
+      background-size: 200% 100%;
+      animation: glow-border-track 3s linear infinite;
+    }
     .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .spec-content h1 { font-size:1.5rem; font-weight:700; color:#e5e7eb; margin:1.5rem 0 .75rem; border-bottom:1px solid #374151; padding-bottom:.5rem; }
     .spec-content h2 { font-size:1.25rem; font-weight:600; color:#d1d5db; margin:1.25rem 0 .5rem; }
@@ -97,52 +215,107 @@
                 <span class="text-xs text-indigo-400 font-mono px-2 py-0.5 bg-indigo-900/50 rounded-full flex-shrink-0" x-text="currentStage"></span>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-[200px_1fr] gap-3">
-                <!-- Current agent card -->
-                <div class="bg-gray-900/80 rounded-lg p-3 border border-indigo-700/40 min-h-[120px] flex flex-col justify-center shimmer gentle-float relative overflow-hidden">
-                  <div class="absolute inset-0 bg-gradient-to-b from-indigo-900/10 to-transparent pointer-events-none"></div>
-                  <p class="text-xs text-indigo-400/70 uppercase tracking-widest mb-2 relative z-10">Active Agent</p>
+                <!-- Current agent card — enhanced -->
+                <div class="bg-gray-900/90 rounded-xl p-4 border min-h-[140px] flex flex-col justify-center relative overflow-hidden agent-card-enter"
+                  :style="'--agent-accent:' + roleGlowRgba(currentAgent, 0.35) + ';--agent-glow-color:' + roleGlowRgba(currentAgent, 0.25) + ';border-color:' + roleBorderRgba(currentAgent, 0.35)"
+                  :class="currentAgent ? 'shimmer' : 'border-gray-800/40'">
+                  <!-- Background effects -->
+                  <div class="absolute -inset-10 pointer-events-none" :class="currentAgent ? '' : 'hidden'">
+                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-20 blur-2xl" :class="roleSolidBg(currentAgent)"></div>
+                  </div>
+                  <div class="absolute top-0 left-0 right-0 h-px glow-border-track" x-show="currentAgent"></div>
+
+                  <p class="text-[10px] uppercase tracking-[0.2em] mb-3 relative z-10" :class="currentAgent ? roleTextColor(currentAgent) + '/70' : 'text-gray-700'">Active Agent</p>
+
                   <template x-if="currentAgent">
-                    <div class="space-y-2 relative z-10">
-                      <div class="flex items-center gap-3">
-                        <div class="relative w-14 h-14 flex-shrink-0">
-                          <div class="absolute inset-0 rounded-full border-2 border-dashed agent-spin" :class="roleBorderColor(currentAgent)"></div>
-                          <div class="absolute inset-0.5 rounded-full ring-2 pulse-ring" :class="'ring-' + (currentAgent === 'lead-developer' ? 'blue' : currentAgent === 'developer' ? 'cyan' : currentAgent === 'code-reviewer' ? 'yellow' : currentAgent === 'qa-engineer' ? 'green' : currentAgent === 'build-agent' ? 'orange' : currentAgent === 'repo-manager' ? 'pink' : 'purple') + '-400/30'"></div>
-                          <div class="absolute inset-1 rounded-full ring-1 pulse-ring-slow" :class="'ring-' + (currentAgent === 'lead-developer' ? 'blue' : currentAgent === 'developer' ? 'cyan' : currentAgent === 'code-reviewer' ? 'yellow' : currentAgent === 'qa-engineer' ? 'green' : currentAgent === 'build-agent' ? 'orange' : currentAgent === 'repo-manager' ? 'pink' : 'purple') + '-400/15'"></div>
-                          <div class="absolute inset-2 rounded-full flex items-center justify-center shadow-lg" :class="roleSolidBg(currentAgent)">
-                            <span class="text-sm font-bold text-white select-none drop-shadow" x-text="agentInitial(currentAgent)"></span>
-                          </div>
+                    <div class="relative z-10 flex items-start gap-4">
+                      <!-- Enhanced Avatar Assembly -->
+                      <div class="relative w-[72px] h-[72px] flex-shrink-0">
+                        <!-- Outer ripple rings -->
+                        <div class="absolute inset-0 rounded-full ripple" :style="'border-color:' + roleHexFade(currentAgent, 0.3)" :key="'rip-'+currentAgent"></div>
+                        <div class="absolute inset-0.5 rounded-full ripple" style="animation-delay:-0.75s" :style="'border-color:' + roleHexFade(currentAgent, 0.2)" :key="'rip2-'+currentAgent"></div>
+                        <!-- Radar sweep cone -->
+                        <div class="absolute inset-0 rounded-full radar-spin overflow-hidden">
+                          <div class="absolute inset-0 rounded-full" :style="'background:conic-gradient(from 0deg,transparent 0%,' + roleHexFade(currentAgent, 0.5) + ' 15%,transparent 30%)'"></div>
                         </div>
-                        <div class="min-w-0 flex-1">
-                          <div class="flex items-center gap-2">
-                            <p class="text-sm font-semibold leading-tight" :class="roleTextColor(currentAgent)" x-text="agentLabel(currentAgent)"></p>
-                            <template x-if="!currentAgentLastMsg">
-                              <span class="flex gap-0.5 ml-1">
-                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-1"></span>
-                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-2"></span>
-                                <span class="w-1 h-1 rounded-full bg-indigo-400 thinking-dot-3"></span>
-                              </span>
-                            </template>
-                          </div>
-                          <div class="flex items-center gap-2 mt-0.5">
-                            <div class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
-                            <p class="text-xs text-gray-400 font-mono tabular-nums" x-text="fmtElapsed(agentElapsed)"></p>
-                          </div>
+                        <!-- Dashed spin border -->
+                        <div class="absolute inset-[3px] rounded-full border-2 border-dashed agent-spin" :class="roleBorderColor(currentAgent)"></div>
+                        <!-- Pulse rings -->
+                        <div class="absolute inset-1.5 rounded-full ring-2 pulse-ring" :class="'ring-' + roleTailwindColor(currentAgent) + '-400/25'"></div>
+                        <div class="absolute inset-2.5 rounded-full ring-1 pulse-ring-slow" :class="'ring-' + roleTailwindColor(currentAgent) + '-400/12'"></div>
+                        <!-- Orbiting dots -->
+                        <div class="absolute inset-0 rounded-full" :key="'orbit-'+currentAgent">
+                          <div class="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full orbit-dot" :class="roleSolidBg(currentAgent)"></div>
                         </div>
+                        <div class="absolute inset-0 rounded-full" :key="'orbit2-'+currentAgent">
+                          <div class="absolute top-1/2 left-1/2 w-1 h-1 rounded-full orbit-dot-reverse" :class="roleSolidBg(currentAgent) + ' opacity-60'"></div>
+                        </div>
+                        <!-- SVG Circular Progress Ring -->
+                        <svg class="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 72 72">
+                          <circle cx="36" cy="36" r="29" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="3"/>
+                          <circle cx="36" cy="36" r="29" fill="none" :stroke="roleHexColor(currentAgent)" stroke-width="3"
+                            stroke-linecap="round" stroke-dasharray="182.2" :stroke-dashoffset="182.2 - (182.2 * Math.min(agentElapsed / 120, 1))"
+                            class="transition-all duration-1000 ease-linear"/>
+                        </svg>
+                        <!-- Core avatar -->
+                        <div class="absolute inset-[9px] rounded-full flex items-center justify-center shadow-xl pulse-glow-role"
+                          :style="'background:radial-gradient(circle at 35% 30%,' + roleLightHex(currentAgent) + ',' + roleHexColor(currentAgent) + ');box-shadow:0 0 16px 4px ' + roleGlowRgba(currentAgent, 0.3), inset 0 -2px 6px rgba(0,0,0,0.3)'">
+                          <span class="text-base font-bold text-white select-none drop-shadow-md tracking-tight" x-text="agentInitial(currentAgent)"></span>
+                        </div>
+                        <!-- Floating particles -->
+                        <div class="absolute -top-1 -right-1 w-1 h-1 rounded-full particle" :class="roleSolidBg(currentAgent) + ' opacity-50'" :key="'p1-'+currentAgent"></div>
+                        <div class="absolute -bottom-0.5 left-0 w-0.5 h-0.5 rounded-full particle" :class="roleSolidBg(currentAgent) + ' opacity-40'" :key="'p2-'+currentAgent"></div>
+                        <div class="absolute top-2 -left-1.5 w-[3px] h-[3px] rounded-full particle" :class="roleSolidBg(currentAgent) + ' opacity-30'" :key="'p3-'+currentAgent"></div>
                       </div>
-                      <template x-if="currentAgentLastMsg">
-                        <div class="mt-1 pl-[68px]">
-                          <p class="text-xs text-gray-400 italic leading-relaxed line-clamp-2 border-l-2 border-gray-700/50 pl-2" x-text="currentAgentLastMsg"></p>
+
+                      <!-- Agent Info -->
+                      <div class="min-w-0 flex-1 pt-0.5">
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <p class="text-base font-bold tracking-tight leading-none" :class="roleTextColor(currentAgent)" x-text="agentLabel(currentAgent)"></p>
+                          <span class="text-[9px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wider" :class="rolePillColor(currentAgent)" x-text="currentStage || 'Active'"></span>
                         </div>
-                      </template>
-                      <template x-if="!currentAgentLastMsg">
-                        <div class="mt-1 pl-[68px]"><p class="text-xs text-gray-600 italic animate-pulse">Processing task…</p></div>
-                      </template>
+                        <div class="flex items-center gap-2 mt-1.5">
+                          <!-- Activity waveform -->
+                          <div class="flex items-end gap-[2px] h-4" x-show="!currentAgentLastMsg">
+                            <div class="w-[3px] rounded-full wf-bar-1" :class="roleSolidBg(currentAgent)"></div>
+                            <div class="w-[3px] rounded-full wf-bar-2" :class="roleSolidBg(currentAgent)"></div>
+                            <div class="w-[3px] rounded-full wf-bar-3" :class="roleSolidBg(currentAgent)"></div>
+                            <div class="w-[3px] rounded-full wf-bar-4" :class="roleSolidBg(currentAgent)"></div>
+                            <div class="w-[3px] rounded-full wf-bar-5" :class="roleSolidBg(currentAgent)"></div>
+                          </div>
+                          <span class="text-xs text-gray-500 font-mono tabular-nums" x-show="!currentAgentLastMsg">working</span>
+                          <span class="text-xs text-gray-500 font-mono tabular-nums type-cursor" x-show="!currentAgentLastMsg">|</span>
+                          <div class="flex items-center gap-1.5 ml-auto">
+                            <div class="w-1.5 h-1.5 rounded-full animate-pulse" :class="roleSolidBg(currentAgent)"></div>
+                            <span class="text-xs font-mono tabular-nums font-semibold" :class="roleTextColor(currentAgent)" x-text="fmtElapsed(agentElapsed)"></span>
+                          </div>
+                        </div>
+                        <!-- Last message or processing state -->
+                        <template x-if="currentAgentLastMsg">
+                          <div class="mt-2 p-2 rounded-md bg-black/20 border border-white/[0.04] relative overflow-hidden">
+                            <div class="absolute bottom-0 left-0 right-0 h-px scan-line bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+                            <p class="text-[11px] text-gray-300 leading-relaxed line-clamp-2" x-text="currentAgentLastMsg"></p>
+                          </div>
+                        </template>
+                        <template x-if="!currentAgentLastMsg">
+                          <div class="mt-2 flex items-center gap-2 text-gray-600">
+                            <svg class="w-3.5 h-3.5 animate-spin" :class="roleTextColor(currentAgent)" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            <span class="text-[11px] italic">Processing task…</span>
+                          </div>
+                        </template>
+                      </div>
                     </div>
                   </template>
+
                   <template x-if="!currentAgent">
-                    <div class="flex items-center gap-2 text-gray-700 relative z-10">
-                      <div class="w-2 h-2 rounded-full bg-gray-600 animate-pulse"></div>
-                      <p class="text-xs">Initializing pipeline…</p>
+                    <div class="relative z-10 flex flex-col items-center justify-center gap-2 py-2">
+                      <div class="relative w-12 h-12">
+                        <div class="absolute inset-0 rounded-full border border-dashed border-gray-700 agent-spin" style="--tw-border-opacity:0.5"></div>
+                        <div class="absolute inset-2 rounded-full bg-gray-800 flex items-center justify-center">
+                          <svg class="w-5 h-5 text-gray-600 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+                        </div>
+                      </div>
+                      <p class="text-xs text-gray-600">Initializing pipeline…</p>
                     </div>
                   </template>
                 </div>
@@ -889,21 +1062,31 @@
     <!-- Header -->
     <div class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-4 shrink-0">
       <div class="flex-1 min-w-0">
-        <span class="font-bold text-gray-100">Design Review</span>
+        <span class="font-bold text-gray-100">🔍 Design Review</span>
         <span class="text-gray-400 text-sm ml-3 truncate" x-text="approvalSpecSummary"></span>
       </div>
       <button @click="submitApproval(true)"
         class="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0">
         ✓ Approve
       </button>
-      <button @click="submitRevise()" :disabled="specComments.length === 0"
-        class="bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0"
-        x-text="specComments.length > 0 ? 'Revise (' + specComments.length + ')' : 'Revise'">
+      <button @click="showRevisePanel = !showRevisePanel"
+        class="bg-amber-700 hover:bg-amber-600 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0"
+        x-text="specComments.length > 0 ? '↩ Revise (' + specComments.length + ')' : '↩ Revise'">
+      </button>
+    </div>
+    <!-- Revise panel (free-text feedback + send) -->
+    <div x-show="showRevisePanel" class="bg-gray-900 border-b border-amber-700/40 px-6 py-3 flex items-start gap-3 shrink-0">
+      <textarea x-model="approvalFeedback" rows="2" placeholder="Optional: describe what needs to change…"
+        class="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"></textarea>
+      <button @click="submitRevise()"
+        :disabled="specComments.length === 0 && !approvalFeedback.trim()"
+        class="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-medium transition-colors whitespace-nowrap">
+        Send Revisions
       </button>
     </div>
     <!-- Dev response banner -->
     <div x-show="approvalDevResponse" class="bg-amber-900/40 border-b border-amber-700/50 px-6 py-2 text-sm text-amber-300 shrink-0">
-      <span class="font-semibold">Developer response:</span> <span x-text="approvalDevResponse"></span>
+      <span class="font-semibold">Developer revised:</span> <span x-text="approvalDevResponse"></span>
     </div>
     <!-- Body: two columns -->
     <div class="flex flex-1 overflow-hidden">
@@ -1076,6 +1259,8 @@ function app() {
     approvalDevResponse: '',
     approvalSeq: null,
     approvalSpecText: '',
+    approvalFeedback: '',
+    showRevisePanel: false,
     specComments: [],
     commentDraft: { visible: false, selectedText: '', commentText: '', range: null, top: 0, left: 0 },
     commentColors: ['#6366f1','#f59e0b','#10b981','#ef4444','#a855f7'],
@@ -1178,6 +1363,8 @@ function app() {
         this.approvalSeq = evt.seq;
         this.approvalDevResponse = evt.developerResponse || '';
         this.specComments = [];
+        this.approvalFeedback = '';
+        this.showRevisePanel = false;
         this.approvalPending = true;
         if (!this.selectedRun || this.selectedRun.id !== evt.run_id) {
           const run = this.runs.find(r => r.id === evt.run_id);
@@ -1224,19 +1411,25 @@ function app() {
         this.runDetail.events = events;
         events.forEach(e => { if (e.type === 'stage_changed') this._stagesReached.add(e.stage); });
       } catch {}
-      // Check approval
+      // Check if run is currently awaiting approval
       try {
         const ar = await fetch('/api/runs/' + id + '/approval');
         if (ar.ok) {
-          const approvalEvt = this.runDetail.events.slice().reverse().find(e => e.type === 'awaiting_approval');
-          if (approvalEvt) {
-            this.approvalRunId = id;
-            this.approvalSpecSummary = approvalEvt.specSummary || '';
-            this.approvalSeq = approvalEvt.seq;
-            this.approvalDevResponse = approvalEvt.developerResponse || '';
-            this.specComments = [];
-            this.approvalPending = true;
-            await this.fetchSpecContent(id, approvalEvt.seq);
+          const arData = await ar.json();
+          if (arData.waiting) {
+            // Find the most recent awaiting_approval event (with seq) to get specSummary + seq
+            const approvalEvt = this.runDetail.events.slice().reverse().find(e => e.type === 'awaiting_approval');
+            if (approvalEvt) {
+              this.approvalRunId = id;
+              this.approvalSpecSummary = approvalEvt.specSummary || '';
+              this.approvalSeq = approvalEvt.seq;
+              this.approvalDevResponse = approvalEvt.developerResponse || '';
+              this.specComments = [];
+              this.approvalFeedback = '';
+              this.showRevisePanel = false;
+              this.approvalPending = true;
+              await this.fetchSpecContent(id, approvalEvt.seq);
+            }
           }
         }
       } catch {}
@@ -1627,10 +1820,13 @@ function app() {
     },
 
     async submitRevise() {
-      if (!this.specComments.length) return;
       const comments = this.specComments.map(c => ({ selectedText: c.selectedText, commentText: c.commentText }));
-      await this.postApproval({ approved: false, comments });
+      const feedback = (this.approvalFeedback || '').trim();
+      if (!comments.length && !feedback) return;
+      await this.postApproval({ approved: false, feedback, comments });
       this.approvalPending = false;
+      this.showRevisePanel = false;
+      this.approvalFeedback = '';
       this.specComments = [];
     },
 

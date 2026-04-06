@@ -175,26 +175,26 @@ class RunManager:
             # Attach seq back onto the event so listeners can use it (e.g. for content fetch)
             evt["seq"] = seq
 
-        async def on_approval_required(spec: str) -> dict:
-            # Store spec content to disk so the UI can fetch it
-            spec_seq_placeholder = {"type": "awaiting_approval", "run_id": run.id}
+        async def on_approval_required(spec: str, developer_response: str = "") -> dict:
+            """Suspend the pipeline, store spec to disk, broadcast awaiting_approval with seq."""
             content_dir = log_dir / "content"
             content_dir.mkdir(parents=True, exist_ok=True)
-            # We broadcast first to get a seq, then update content_path
             spec_summary = spec[:300].rstrip()
-            evt = {
+            # Insert the event FIRST so we have the seq, then broadcast with seq included
+            evt: dict = {
                 "type": "awaiting_approval",
                 "run_id": run.id,
                 "specSummary": spec_summary,
-                "developerResponse": "",
+                "developerResponse": developer_response[:300] if developer_response else "",
             }
-            await self._broadcaster.broadcast(evt)
             seq = await self._db.insert_event(run.id, evt)
+            # Write spec markdown to disk
             spec_path = content_dir / f"spec-{seq}.md"
             spec_path.write_text(spec, encoding="utf-8")
-            # Update the DB row to record the content_path
             await self._db.update_event_content_path(run_id=run.id, seq=seq, content_path=str(spec_path))
-            # Tell the gate to wait
+            # Now broadcast WITH seq so the frontend can fetch the content
+            evt["seq"] = seq
+            await self._broadcaster.broadcast(evt)
             return await gate.wait(spec)
 
         async def save_ckpt(data: dict) -> None:

@@ -716,8 +716,26 @@
                           <span x-text="activeAgentActionForRun()"></span>
                         </div>
                       </div>
-                      <!-- Arrow between stages -->
-                      <div x-show="si < 3" class="flex items-center self-center h-16 text-gray-700 text-xl px-0.5 flex-shrink-0">→</div>
+                      <!-- After Design stage (si=0): approval gate node flanked by arrows -->
+                      <template x-if="si === 0">
+                        <div class="flex items-center self-center gap-0.5">
+                          <div class="text-gray-700 text-xl px-0.5 flex-shrink-0">→</div>
+                          <!-- Approval gate diamond -->
+                          <div @click="gateClick()"
+                            :class="gateNodeClass()"
+                            class="flex flex-col items-center justify-center rounded-xl border-2 w-20 h-20 p-2 transition-all flex-shrink-0 select-none"
+                            :title="gateStatusText()">
+                            <span class="text-lg leading-none" x-text="gateNodeIcon()"></span>
+                            <span class="text-[9px] font-bold mt-1 text-center leading-tight uppercase tracking-wide" :class="gateLabelClass()">Human<br>Review</span>
+                            <template x-if="gateStateForRun().status === 'waiting'">
+                              <span class="mt-1 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                            </template>
+                          </div>
+                          <div class="text-gray-700 text-xl px-0.5 flex-shrink-0">→</div>
+                        </div>
+                      </template>
+                      <!-- Regular arrows between stages 1→2, 2→3 -->
+                      <div x-show="si > 0 && si < 3" class="flex items-center self-center h-16 text-gray-700 text-xl px-0.5 flex-shrink-0">→</div>
                     </div>
                   </template>
                 </div>
@@ -755,15 +773,27 @@
                       <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider" x-text="entry.label"></span>
                     </div>
                   </template>
+                  <template x-if="entry.type === 'gate'">
+                    <div class="flex items-center gap-2 py-1.5 pl-2 border-t border-amber-900/30 mt-1">
+                      <span class="text-xs font-medium text-amber-400" x-text="entry.label"></span>
+                    </div>
+                  </template>
                   <template x-if="entry.type === 'agent'">
                     <div class="flex items-center gap-2 py-1 pl-4 text-xs">
                       <span :class="entry.success === null ? 'text-indigo-400 animate-pulse' : entry.success ? 'text-green-400' : 'text-red-400'"
                         x-text="entry.success === null ? '●' : entry.success ? '✓' : '✗'"></span>
                       <button @click="openLogViewer(selectedRun.id, entry.role)"
                         class="font-medium hover:underline text-indigo-400 flex-shrink-0" x-text="agentLabel(entry.role)"></button>
-                      <span class="text-gray-500 truncate" x-text="entry.summary || entry.action || ''"></span>
+                      <span class="text-gray-500 truncate" :title="entry.summary"
+                        x-text="(entry.summary || entry.action || '').slice(0, 200)"></span>
                       <span class="ml-auto text-gray-600 whitespace-nowrap flex-shrink-0"
                         x-text="entry.elapsed !== '…' ? entry.elapsed + 's' : '…'"></span>
+                    </div>
+                  </template>
+                  <template x-if="entry.type === 'tool_call'">
+                    <div class="flex items-center gap-2 py-0.5 pl-8 text-xs text-gray-600">
+                      <span class="text-gray-700">⚙</span>
+                      <span class="font-mono text-gray-600" x-text="entry.toolName + '(' + (entry.argsPreview || '').slice(0,60) + ')'"></span>
                     </div>
                   </template>
                 </div>
@@ -1057,79 +1087,134 @@
 
   </main>
 
-  <!-- ── DESIGN REVIEW OVERLAY ─────────────────────────────── -->
-  <div x-show="approvalPending" x-cloak class="fixed inset-0 z-50 bg-gray-950/95 flex flex-col">
+  <!-- ── DESIGN REVIEW PAGE (full-page view, not overlay) ──── -->
+  <div x-show="view === 'design-review'" x-cloak
+    class="fixed inset-0 z-40 bg-gray-950 flex flex-col"
+    style="display: none">
     <!-- Header -->
-    <div class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-4 shrink-0">
+    <div class="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center gap-3 shrink-0">
+      <button @click="view = 'run'" class="text-gray-400 hover:text-white text-sm flex items-center gap-1.5 flex-shrink-0">
+        ← Back
+      </button>
+      <div class="w-px h-5 bg-gray-700 flex-shrink-0"></div>
       <div class="flex-1 min-w-0">
-        <span class="font-bold text-gray-100">🔍 Design Review</span>
-        <span class="text-gray-400 text-sm ml-3 truncate" x-text="approvalSpecSummary"></span>
+        <span class="font-bold text-gray-100 text-sm">🔍 Design Review</span>
+        <span class="text-gray-500 text-xs ml-2 truncate" x-show="selectedRun" x-text="selectedRun?.id?.slice(0,8)"></span>
       </div>
+      <!-- Revision count badge -->
+      <span x-show="approvalDevResponse" class="text-xs px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700/40 flex-shrink-0">
+        Revision requested
+      </span>
       <button @click="submitApproval(true)"
-        class="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0">
-        ✓ Approve
+        class="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded text-sm font-semibold transition-colors flex-shrink-0 flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+        Approve
       </button>
       <button @click="showRevisePanel = !showRevisePanel"
-        class="bg-amber-700 hover:bg-amber-600 text-white px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0"
-        x-text="specComments.length > 0 ? '↩ Revise (' + specComments.length + ')' : '↩ Revise'">
+        class="border border-amber-600 hover:bg-amber-900/40 text-amber-400 px-4 py-2 rounded text-sm font-medium transition-colors flex-shrink-0"
+        :class="showRevisePanel ? 'bg-amber-900/40' : ''"
+        x-text="specComments.length > 0 ? '↩ Request Revision (' + specComments.length + ' comment' + (specComments.length > 1 ? 's' : '') + ')' : '↩ Request Revision'">
       </button>
     </div>
-    <!-- Revise panel (free-text feedback + send) -->
-    <div x-show="showRevisePanel" class="bg-gray-900 border-b border-amber-700/40 px-6 py-3 flex items-start gap-3 shrink-0">
-      <textarea x-model="approvalFeedback" rows="2" placeholder="Optional: describe what needs to change…"
-        class="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"></textarea>
+
+    <!-- Revise panel (collapsible) -->
+    <div x-show="showRevisePanel" x-transition
+      class="bg-gray-900 border-b border-amber-700/50 px-4 py-3 flex items-start gap-3 shrink-0">
+      <div class="flex-1">
+        <p class="text-xs text-amber-400 mb-2 font-medium">Additional feedback for the developer (optional — inline comments above will also be sent):</p>
+        <textarea x-model="approvalFeedback" rows="3"
+          placeholder="Describe what needs to change, overall concerns, or specific requirements…"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"></textarea>
+      </div>
       <button @click="submitRevise()"
         :disabled="specComments.length === 0 && !approvalFeedback.trim()"
-        class="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-medium transition-colors whitespace-nowrap">
+        class="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-medium transition-colors whitespace-nowrap mt-5 flex-shrink-0">
         Send Revisions
       </button>
     </div>
-    <!-- Dev response banner -->
-    <div x-show="approvalDevResponse" class="bg-amber-900/40 border-b border-amber-700/50 px-6 py-2 text-sm text-amber-300 shrink-0">
-      <span class="font-semibold">Developer revised:</span> <span x-text="approvalDevResponse"></span>
+
+    <!-- Dev response banner (previous revision round) -->
+    <div x-show="approvalDevResponse"
+      class="bg-blue-900/30 border-b border-blue-700/40 px-4 py-2 text-sm text-blue-300 shrink-0">
+      <span class="font-semibold text-blue-200">🔄 Developer response:</span>
+      <span class="ml-1" x-text="approvalDevResponse"></span>
     </div>
-    <!-- Body: two columns -->
+
+    <!-- Help text -->
+    <div class="bg-gray-900/50 border-b border-gray-800/50 px-4 py-1.5 text-xs text-gray-600 shrink-0 flex items-center gap-4">
+      <span>💡 <strong class="text-gray-500">Tip:</strong> Select text in the spec to add an inline comment</span>
+      <span x-show="specComments.length > 0" class="text-amber-500/70">
+        <span x-text="specComments.length"></span> inline comment<span x-show="specComments.length !== 1">s</span> added
+      </span>
+    </div>
+
+    <!-- Body: spec + comments side-by-side -->
     <div class="flex flex-1 overflow-hidden">
-      <!-- Left: spec render -->
-      <div class="flex-1 overflow-y-auto bg-gray-950 p-8 scrollbar-thin">
+      <!-- Left: rendered spec (70%) -->
+      <div class="flex-1 overflow-y-auto bg-gray-950 px-8 py-6 scrollbar-thin relative">
+        <!-- Loading state -->
+        <div x-show="!approvalSpecText" class="text-gray-600 text-sm text-center pt-20">Loading spec…</div>
         <div id="spec-render" @mouseup="onSpecMouseUp($event)"
-          class="spec-content leading-relaxed text-sm text-gray-200 select-text max-w-3xl mx-auto">
+          class="spec-content leading-relaxed text-sm text-gray-200 select-text max-w-3xl mx-auto"
+          x-show="approvalSpecText">
         </div>
       </div>
-      <!-- Right: comments panel -->
-      <div class="w-80 shrink-0 bg-gray-900 border-l border-gray-800 overflow-y-auto p-4 flex flex-col gap-3 scrollbar-thin">
-        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          Comments (<span x-text="specComments.length"></span>)
+      <!-- Right: comments sidebar (30%, min 280px) -->
+      <div class="w-80 shrink-0 bg-gray-900 border-l border-gray-800 overflow-y-auto flex flex-col scrollbar-thin">
+        <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-4 py-2.5 z-10">
+          <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+            Comments
+            <span x-show="specComments.length > 0" class="ml-1 bg-indigo-600 text-white rounded-full px-1.5 py-0.5 text-[10px]" x-text="specComments.length"></span>
+          </span>
         </div>
-        <div x-show="specComments.length === 0" class="text-sm text-gray-600">
-          Select text in the spec to add a comment.
+        <div class="p-4 flex flex-col gap-3">
+          <p x-show="specComments.length === 0" class="text-sm text-gray-600 text-center py-8">
+            Select text in the spec<br>to add inline comments.
+          </p>
+          <template x-for="c in specComments" :key="c.id">
+            <div class="bg-gray-800 rounded-lg overflow-hidden border border-gray-700/80 cursor-pointer transition-all hover:border-gray-600"
+              :style="'border-left: 3px solid ' + c.color"
+              @mouseenter="highlightComment(c.id)" @mouseleave="clearHighlight()">
+              <div class="px-3 pt-3 pb-2">
+                <div class="text-xs text-gray-500 italic mb-2 leading-relaxed border-l-2 pl-2"
+                  :style="'border-color:' + c.color + '60'"
+                  x-text="c.selectedText"></div>
+                <div class="text-sm text-gray-200 leading-snug" x-text="c.commentText"></div>
+              </div>
+              <div class="px-3 pb-2 flex justify-end">
+                <button @click.stop="removeComment(c.id)"
+                  class="text-xs text-gray-600 hover:text-red-400 transition-colors">× remove</button>
+              </div>
+            </div>
+          </template>
         </div>
-        <template x-for="c in specComments" :key="c.id">
-          <div class="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm cursor-pointer hover:bg-gray-700/80 transition-colors"
-            :style="'border-left: 3px solid ' + c.color"
-            @mouseenter="highlightComment(c.id)" @mouseleave="clearHighlight()">
-            <div class="text-xs text-gray-500 italic truncate mb-1" x-text="'&quot;' + c.selectedText + '&quot;'"></div>
-            <div class="text-gray-300" x-text="c.commentText"></div>
-            <button @click.stop="removeComment(c.id)" class="mt-1 text-xs text-gray-600 hover:text-red-400">× remove</button>
-          </div>
-        </template>
       </div>
     </div>
-    <!-- Comment draft popover -->
+
+    <!-- Comment draft popover (floats over spec) -->
     <div x-show="commentDraft.visible" x-cloak
-      class="fixed bg-gray-800 shadow-2xl rounded-lg border border-gray-700 p-3 z-[60] w-72"
+      class="fixed bg-gray-800 shadow-2xl rounded-xl border border-gray-700 p-4 z-[60] w-80"
       :style="'top:' + commentDraft.top + 'px; left:' + commentDraft.left + 'px'">
-      <div class="text-xs text-gray-500 italic mb-2 truncate" x-text="'&quot;' + commentDraft.selectedText + '&quot;'"></div>
-      <textarea x-model="commentDraft.commentText" rows="3" placeholder="Your comment…"
-        class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        @keydown.escape="commentDraft.visible = false"></textarea>
-      <div class="flex gap-2 mt-2">
+      <div class="text-xs text-gray-500 italic mb-3 leading-relaxed border-l-2 border-indigo-500/40 pl-2 truncate"
+        x-text="commentDraft.selectedText"></div>
+      <textarea x-model="commentDraft.commentText" rows="3"
+        placeholder="Add your comment…"
+        class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        @keydown.escape="commentDraft.visible = false"
+        @keydown.meta.enter="addComment()"
+        x-init="$nextTick(() => $el.focus())">
+      </textarea>
+      <div class="flex gap-2 mt-3">
         <button @click="addComment()" :disabled="!commentDraft.commentText.trim()"
-          class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs disabled:opacity-40 transition-colors">
+          class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors">
           Add Comment
         </button>
-        <button @click="commentDraft.visible = false" class="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+        <button @click="commentDraft.visible = false"
+          class="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 border border-gray-700 rounded-lg transition-colors">
+          Cancel
+        </button>
       </div>
+      <p class="text-[10px] text-gray-600 mt-2 text-center">⌘+Enter to add</p>
     </div>
   </div>
 
@@ -1311,7 +1396,10 @@ function app() {
         this.currentAgent = null;
         this.currentAgentLastMsg = '';
         this.loadRuns();
-        if (evt.run_id === this.approvalRunId) this.approvalPending = false;
+        if (evt.run_id === this.approvalRunId) {
+          this.approvalPending = false;
+          if (this.view === 'design-review') this.view = 'run';
+        }
         if (this.selectedRun && evt.run_id && evt.run_id === this.selectedRun.id) {
           this.runDetail.events.push(evt);
         }
@@ -1366,20 +1454,31 @@ function app() {
         this.approvalFeedback = '';
         this.showRevisePanel = false;
         this.approvalPending = true;
+        // Ensure run is loaded into selectedRun
         if (!this.selectedRun || this.selectedRun.id !== evt.run_id) {
           const run = this.runs.find(r => r.id === evt.run_id);
           if (run) {
             this.selectedRun = run;
-            this.view = 'run';
             this.runDetail = { events: [] };
             this._agentState = {};
+            this._stagesReached = new Set();
             fetch('/api/runs/' + evt.run_id + '/events')
               .then(r => r.json())
               .then(events => { this.runDetail = { events }; })
               .catch(() => {});
           }
         }
-        this.fetchSpecContent(evt.run_id, evt.seq).catch(() => {});
+        // Load spec and navigate to design-review
+        this.fetchSpecContent(evt.run_id, evt.seq)
+          .then(() => { this.view = 'design-review'; })
+          .catch(() => { this.view = 'design-review'; });
+      }
+      // Gate resolved — update state (events array already updated above)
+      if (evt.type === 'design_approval_received') {
+        if (this.approvalRunId === evt.run_id && this.view === 'design-review') {
+          this.view = 'run';
+        }
+        this.approvalPending = false;
       }
     },
 
@@ -1411,13 +1510,13 @@ function app() {
         this.runDetail.events = events;
         events.forEach(e => { if (e.type === 'stage_changed') this._stagesReached.add(e.stage); });
       } catch {}
-      // Check if run is currently awaiting approval
+      // Check if run is currently awaiting approval — load spec but don't auto-navigate
+      // (user can click the gate node in the pipeline to open design review)
       try {
         const ar = await fetch('/api/runs/' + id + '/approval');
         if (ar.ok) {
           const arData = await ar.json();
           if (arData.waiting) {
-            // Find the most recent awaiting_approval event (with seq) to get specSummary + seq
             const approvalEvt = this.runDetail.events.slice().reverse().find(e => e.type === 'awaiting_approval');
             if (approvalEvt) {
               this.approvalRunId = id;
@@ -1428,7 +1527,8 @@ function app() {
               this.approvalFeedback = '';
               this.showRevisePanel = false;
               this.approvalPending = true;
-              await this.fetchSpecContent(id, approvalEvt.seq);
+              // Pre-load spec in background so gate click is instant
+              this.fetchSpecContent(id, approvalEvt.seq).catch(() => {});
             }
           }
         }
@@ -1678,6 +1778,72 @@ function app() {
       return PIPELINE_STAGES.map(s => ({ ...s, ...stageState[s.key] }));
     },
 
+    // ── Approval Gate Node ────────────────────────────────────
+    gateStateForRun() {
+      const events = this.runDetail?.events || [];
+      let status = 'pending';
+      let seq = null;
+      for (const evt of events) {
+        if (evt.type === 'awaiting_approval') {
+          status = 'waiting';
+          seq = evt.seq;
+        } else if (evt.type === 'design_approval_received') {
+          status = 'approved';
+        } else if (evt.type === 'stage_changed' && /stage\s*2/i.test(evt.stage || '')) {
+          if (status === 'waiting') status = 'approved';
+        }
+      }
+      // If run completed and gate was never reached, mark as skipped (headless mode)
+      if (status === 'pending' && this.selectedRun?.status === 'completed') status = 'skipped';
+      return { status, seq };
+    },
+
+    gateNodeClass() {
+      const { status } = this.gateStateForRun();
+      if (status === 'waiting') return 'border-amber-500 bg-amber-900/30 cursor-pointer shadow-lg shadow-amber-900/30 hover:bg-amber-900/50 hover:border-amber-400';
+      if (status === 'approved') return 'border-green-600 bg-green-900/20 cursor-default';
+      if (status === 'skipped') return 'border-gray-700/40 bg-gray-900/30 cursor-default opacity-40';
+      return 'border-gray-700 bg-gray-900 cursor-default';
+    },
+
+    gateNodeIcon() {
+      const { status } = this.gateStateForRun();
+      if (status === 'waiting') return '⏸';
+      if (status === 'approved') return '✓';
+      if (status === 'skipped') return '–';
+      return '👁';
+    },
+
+    gateLabelClass() {
+      const { status } = this.gateStateForRun();
+      if (status === 'waiting') return 'text-amber-300';
+      if (status === 'approved') return 'text-green-400';
+      return 'text-gray-600';
+    },
+
+    gateStatusText() {
+      const { status } = this.gateStateForRun();
+      if (status === 'waiting') return 'Click to review & approve design';
+      if (status === 'approved') return 'Design approved';
+      if (status === 'skipped') return 'Skipped (headless)';
+      return 'Awaiting design phase';
+    },
+
+    gateClick() {
+      const { status } = this.gateStateForRun();
+      if (status === 'waiting' && this.selectedRun) {
+        // If spec already loaded, go straight to design-review
+        if (this.approvalSpecText) {
+          this.view = 'design-review';
+        } else {
+          // Fetch spec then navigate
+          this.fetchSpecContent(this.selectedRun.id, this.approvalSeq)
+            .then(() => { this.view = 'design-review'; })
+            .catch(() => { this.view = 'design-review'; });
+        }
+      }
+    },
+
     stageCardClassDark(stage) {
       if (stage.status === 'active') return 'border-indigo-500 bg-indigo-900/20';
       if (stage.status === 'completed') return stage.hasFailure ? 'border-orange-700/60 bg-orange-900/10' : 'border-green-700/60 bg-green-900/10';
@@ -1739,6 +1905,12 @@ function app() {
             type: 'agent', role: evt.role, success: evt.success,
             summary: evt.summary || '', elapsed: evt.elapsed_ms ? (evt.elapsed_ms / 1000).toFixed(1) : '0',
           });
+        } else if (evt.type === 'agent_tool_call') {
+          log.push({ type: 'tool_call', role: evt.role, toolName: evt.tool_name, argsPreview: evt.args_preview || '' });
+        } else if (evt.type === 'awaiting_approval') {
+          log.push({ type: 'gate', label: '⏸ Design Review — awaiting human approval' });
+        } else if (evt.type === 'design_approval_received') {
+          log.push({ type: 'gate', label: '✓ Design approved — proceeding to implementation' });
         }
       }
 
@@ -1816,7 +1988,10 @@ function app() {
 
     async submitApproval(approved) {
       await this.postApproval({ approved });
-      if (approved) this.approvalPending = false;
+      if (approved) {
+        this.approvalPending = false;
+        this.view = 'run';
+      }
     },
 
     async submitRevise() {
@@ -1828,6 +2003,8 @@ function app() {
       this.showRevisePanel = false;
       this.approvalFeedback = '';
       this.specComments = [];
+      this.approvalSpecText = '';
+      this.view = 'run';
     },
 
     async postApproval(body) {

@@ -195,7 +195,13 @@ class RunManager:
             # Now broadcast WITH seq so the frontend can fetch the content
             evt["seq"] = seq
             await self._broadcaster.broadcast(evt)
-            return await gate.wait(spec)
+            result = await gate.wait(spec)
+            # Emit design_approval_received so frontend can update the gate node state
+            if result.get("approved"):
+                approval_evt = {"type": "design_approval_received", "run_id": run.id}
+                await self._db.insert_event(run.id, approval_evt)
+                await self._broadcaster.broadcast(approval_evt)
+            return result
 
         async def save_ckpt(data: dict) -> None:
             await self._db.save_checkpoint(run.id, data)

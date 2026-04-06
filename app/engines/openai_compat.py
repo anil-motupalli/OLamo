@@ -378,7 +378,8 @@ class OpenAIEngine:
             if msg.content:
                 entry["content"] = msg.content
                 result = msg.content
-                await on_event({"type": "agent_message", "role": role, "text": msg.content[:300]})
+                # Emit full content — no truncation so log files get everything
+                await on_event({"type": "agent_message", "role": role, "text": msg.content})
             if msg.tool_calls:
                 entry["tool_calls"] = [
                     {
@@ -398,7 +399,22 @@ class OpenAIEngine:
                     tc_args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     tc_args = {}
+                # Emit tool call event so logs and UI show what the agent is doing
+                args_preview = json.dumps(tc_args)[:200]
+                await on_event({
+                    "type": "agent_tool_call",
+                    "role": role,
+                    "tool_name": tc.function.name,
+                    "args_preview": args_preview,
+                })
                 tool_result = await _run_tool(tc.function.name, tc_args)
+                # Emit tool result event (truncated for SSE, full content in log file)
+                await on_event({
+                    "type": "agent_tool_result",
+                    "role": role,
+                    "tool_name": tc.function.name,
+                    "result_preview": tool_result[:500],
+                })
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,

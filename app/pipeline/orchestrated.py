@@ -22,16 +22,16 @@ from .helpers import _reviewer_prompt, _extract_comment_ids
 
 
 def _write_agent_log(log_dir: str, role: str, prompt: str, lines: list[str], result: str, elapsed_ms: int) -> None:
-    """Append one agent call's I/O to logs/{run_id}/{role}.log."""
+    """Append one agent call's I/O to logs/{run_id}/{role}.log — full content, no truncation."""
     try:
         log_path = Path(log_dir) / f"{role}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(f"\n{'─' * 60}\n")
-            fh.write(f"[{ts}] PROMPT ({elapsed_ms}ms):\n{prompt[:800]}\n\n")
+            fh.write(f"[{ts}] PROMPT ({elapsed_ms}ms):\n{prompt}\n\n")
             if lines:
-                fh.write("STREAM:\n" + "\n".join(lines) + "\n\n")
+                fh.write("ACTIVITY:\n" + "\n".join(lines) + "\n\n")
             fh.write(f"RESULT:\n{result}\n")
     except Exception:
         pass  # never crash the pipeline over logging
@@ -108,11 +108,19 @@ async def run_pipeline_orchestrated(
         system_prompt, tools, _ = AGENT_CONFIGS[role]
         eng, model, model_config, mcp_servers = _resolve(role)
 
-        # Intercept messages to write per-agent log file
+        # Intercept messages to write per-agent log file (captures messages AND tool calls)
         log_lines: list[str] = []
         async def _forwarding_on_event(evt: dict) -> None:
-            if evt.get("type") == "agent_message":
-                log_lines.append(evt.get("text", ""))
+            etype = evt.get("type", "")
+            if etype == "agent_message":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] MESSAGE: {evt.get('text', '')}")
+            elif etype == "agent_tool_call":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL CALL: {evt.get('tool_name')}({evt.get('args_preview', '')})")
+            elif etype == "agent_tool_result":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL RESULT ({evt.get('tool_name')}): {evt.get('result_preview', '')}")
             await on_event(evt)
 
         try:
@@ -127,7 +135,7 @@ async def run_pipeline_orchestrated(
                 on_event=_forwarding_on_event,
             )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            summary = result[:300].strip() if result else ""
+            summary = result.strip() if result else ""
             await on_event({"type": "agent_completed", "role": role, "success": True, "elapsed_ms": elapsed_ms, "summary": summary})
             # Write per-agent log
             if log_dir:

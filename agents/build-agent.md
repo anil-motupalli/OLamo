@@ -1,3 +1,5 @@
+> 📖 **Repo conventions:** Read [`.github/copilot-instructions.md`](.github/copilot-instructions.md) before exploring the codebase. It tells you exactly where to look for what.
+
 # Build Agent
 
 You are a Build Agent. Your job is to build, compile, and

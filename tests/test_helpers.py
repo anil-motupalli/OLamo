@@ -12,6 +12,8 @@ from app.pipeline.helpers import (
     _make_env,
     _parse_stage_announcement,
     _reviewer_prompt,
+    parse_review_json,
+    parse_finding_responses,
 )
 
 
@@ -62,10 +64,6 @@ class TestParseStageAnnouncement:
 
 
 class TestReviewerPrompt:
-    def test_code_reviewer_prompt(self):
-        prompt = _reviewer_prompt("code-reviewer", "the plan", "")
-        assert "Review the implementation" in prompt
-
     def test_qa_engineer_prompt_includes_plan(self):
         prompt = _reviewer_prompt("qa-engineer", "my plan", "")
         assert "REVIEW CODE" in prompt
@@ -77,14 +75,13 @@ class TestReviewerPrompt:
         assert "my plan" in prompt
 
     def test_diff_ctx_appended(self):
-        prompt = _reviewer_prompt("code-reviewer", "p", "\ndiff --git a/f b/f")
+        prompt = _reviewer_prompt("qa-engineer", "p", "\ndiff --git a/f b/f")
         assert "diff --git" in prompt
 
-    def test_all_reviewers_constant_has_three_entries(self):
-        assert len(_ALL_REVIEWERS) == 3
+    def test_all_reviewers_constant_has_two_entries(self):
+        assert len(_ALL_REVIEWERS) == 2
 
     def test_all_reviewers_contains_expected_roles(self):
-        assert "code-reviewer" in _ALL_REVIEWERS
         assert "qa-engineer" in _ALL_REVIEWERS
         assert "lead-developer" in _ALL_REVIEWERS
 
@@ -226,3 +223,57 @@ class TestExtractCommentIds:
 
     def test_handles_alphanumeric_ids(self):
         assert _extract_comment_ids("ID: PR-456") == ["PR-456"]
+
+
+class TestParseReviewJson:
+    def test_valid_approved_json(self):
+        text = '{"decision": "Approved", "findings": []}'
+        result = parse_review_json(text)
+        assert result["decision"] == "Approved"
+        assert result["findings"] == []
+
+    def test_valid_needs_improvement_json(self):
+        text = '{"decision": "NeedsImprovement", "findings": [{"id": "f1", "type": "Bug", "severity": "Critical", "file": "x.py", "line": 1, "description": "d", "suggestion": "s"}]}'
+        result = parse_review_json(text)
+        assert result["decision"] == "NeedsImprovement"
+        assert len(result["findings"]) == 1
+        assert result["findings"][0]["id"] == "f1"
+
+    def test_markdown_fenced_json(self):
+        text = '```json\n{"decision": "Approved", "findings": []}\n```'
+        result = parse_review_json(text)
+        assert result["decision"] == "Approved"
+
+    def test_assigns_ids_when_missing(self):
+        text = '{"decision": "NeedsImprovement", "findings": [{"type": "Bug", "severity": "MustHave", "file": null, "line": 0, "description": "d", "suggestion": "s"}]}'
+        result = parse_review_json(text)
+        assert result["findings"][0]["id"] == "f1"
+
+    def test_fallback_approved_keyword(self):
+        result = parse_review_json("Everything looks good. APPROVED.")
+        assert result["decision"] == "Approved"
+        assert result["findings"] == []
+
+    def test_fallback_needs_improvement_keyword(self):
+        result = parse_review_json("NEEDS IMPROVEMENT: missing tests")
+        assert result["decision"] == "NeedsImprovement"
+
+
+class TestParseFindingResponses:
+    def test_no_separator_returns_full_text(self):
+        text, responses = parse_finding_responses("just some output")
+        assert text == "just some output"
+        assert responses == []
+
+    def test_splits_on_separator(self):
+        responses_json = '[{"id": "f1", "action": "FIXED", "explanation": "done"}]'
+        text, responses = parse_finding_responses(f"my plan\n---FINDING_RESPONSES---\n{responses_json}")
+        assert text == "my plan"
+        assert len(responses) == 1
+        assert responses[0]["id"] == "f1"
+        assert responses[0]["action"] == "FIXED"
+
+    def test_invalid_json_returns_empty_responses(self):
+        text, responses = parse_finding_responses("plan\n---FINDING_RESPONSES---\nnot json")
+        assert text == "plan"
+        assert responses == []

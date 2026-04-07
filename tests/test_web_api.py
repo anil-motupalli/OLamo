@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "static").mkdir()
     (tmp_path / "static" / "index.html").write_text("<html>OLamo</html>")
-    app = create_app()
+    app = create_app(db_path=str(tmp_path / "test.db"))
     with TestClient(app) as c:
         yield c
 

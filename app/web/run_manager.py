@@ -34,9 +34,10 @@ class RunManager:
         self,
         broadcaster: SseBroadcaster,
         store: "SettingsStore",
-        db_path: str = "olamo.db",
+        db_path: str = str(Path.home() / ".OLamo" / "olamo.db"),
         max_concurrent: int = _DEFAULT_MAX_CONCURRENT,
     ) -> None:
+        Path.home().joinpath(".OLamo", "logs").mkdir(parents=True, exist_ok=True)
         self._broadcaster = broadcaster
         self._store = store
         self._db = OLamoDb(db_path)
@@ -149,7 +150,7 @@ class RunManager:
     async def _execute_run(self, run: RunRecord) -> None:
         run.status = RunStatus.RUNNING
         run.started_at = datetime.now(timezone.utc).isoformat()
-        log_dir = Path("logs") / (run.run_id or run.id)
+        log_dir = Path.home() / ".OLamo" / "logs" / (run.run_id or run.id)
         log_dir.mkdir(parents=True, exist_ok=True)
         run.log_dir = str(log_dir)
         await self._db.upsert_run(run)

@@ -12,7 +12,7 @@
     "max_pr_cycles": 3
   },
   "agents": {
-    "reviewers": ["code-reviewer", "qa-engineer", "lead-developer"],
+    "reviewers": ["qa-engineer", "lead-developer"],
     "default_engines": {
       "lead-developer": "claude",
       "developer":      "claude",

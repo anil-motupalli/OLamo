@@ -20,7 +20,7 @@ from .run_manager import RunManager
 from .github import _run_gh, _pr_number_from_url
 
 
-def create_app(settings_file: Path | None = None):  # noqa: ANN201
+def create_app(settings_file: Path | None = None, db_path: str | None = None):  # noqa: ANN201
     try:
         from contextlib import asynccontextmanager
 
@@ -35,7 +35,8 @@ def create_app(settings_file: Path | None = None):  # noqa: ANN201
 
     broadcaster = SseBroadcaster()
     store = SettingsStore(settings_file=settings_file)
-    manager = RunManager(broadcaster, store)
+    kwargs = {"db_path": db_path} if db_path else {}
+    manager = RunManager(broadcaster, store, **kwargs)
     static_dir = Path(__file__).parent.parent.parent / "static"
 
     @asynccontextmanager

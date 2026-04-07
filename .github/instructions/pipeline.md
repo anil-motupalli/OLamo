@@ -12,23 +12,27 @@
 ### Stage 1: Design loop
 
 1. `lead-developer` receives the raw task → produces a full implementation plan
-2. Loop up to `max_design_cycles` (default 5):
-   - `qa-engineer` reviews the plan (`REVIEW DESIGN`)
-   - If `APPROVED` → break
-   - Otherwise `lead-developer` refines the plan, addressing each finding explicitly with `ADDRESSED` or `PUSHBACK` per finding. The revised plan + response is passed back to QA next cycle so QA can reconsider pushed-back items
-3. Human approval gate (web mode only) — suspends pipeline via `ApprovalGate` (`app/pipeline/approval_gate.py`), sends `awaiting_approval` SSE. Human can approve or request revision. On revision: lead-developer refines → QA re-runs → gate re-presents
-4. Checkpoint saved with `completed_stage: 1`
+2. Emits `design_plan_created` SSE event (`{revision: 0, plan}`)
+3. Loop up to `max_design_cycles` (default 5):
+   - `qa-engineer` reviews the plan (`REVIEW DESIGN`) — outputs **structured JSON**
+   - Emits `design_review_findings` SSE event (`{revision, findings, decision}`)
+   - If `decision == "Approved"` → break
+   - Otherwise `lead-developer` refines the plan, responding to each finding by ID with `ADDRESSED` or `PUSHBACK` using `---FINDING_RESPONSES---` separator
+   - Emits `design_plan_revised` SSE event (`{revision, plan, responses}`)
+4. Emits `design_approved` SSE event (`{plan}`)
+5. Human approval gate (web mode only) — suspends pipeline via `ApprovalGate` (`app/pipeline/approval_gate.py`), sends `awaiting_approval` SSE. Human can approve or request revision. On revision: lead-developer refines → QA re-runs → gate re-presents
+6. Checkpoint saved with `completed_stage: 1`
 
 ### Stage 2: Implementation loop
 
 Loop up to `max_impl_cycles` (default 5):
 
-1. `developer` receives the plan (+ any prior review findings) — implements changes, responds per-finding with `FIXED` or `PUSHBACK`
+1. `developer` receives the plan (+ any prior review findings as a JSON array with IDs) — implements changes, responds per-finding with `FIXED` or `PUSHBACK` using `---FINDING_RESPONSES---` separator
 2. Build loop (up to `max_build_cycles`, default 3): `build-agent` builds and tests; on failure `developer` fixes
-3. Parallel review: `code-reviewer`, `qa-engineer`, `lead-developer` review concurrently
-   - Developer's per-finding response from step 1 is included as context so reviewers can accept reasonable pushbacks
-   - Reviewers that return `APPROVED` are added to `already_approved` and skipped in subsequent cycles unless a `CRITICAL` finding appears
-4. If any reviewer returns `NEEDS IMPROVEMENT` → next cycle with those findings
+3. Parallel review: `qa-engineer` and `lead-developer` review concurrently, outputting **structured JSON**
+   - Developer's per-finding responses (from `---FINDING_RESPONSES---`) are passed as context so reviewers can weigh pushbacks
+   - Reviewers with `decision == "Approved"` are added to `already_approved` and skipped in subsequent cycles unless a `Critical` or `MustHave` finding appears
+4. If any reviewer returns `NeedsImprovement` → next cycle with those findings (as JSON with IDs)
 5. Checkpoint saved after each cycle
 
 ### Stage 3: Commit & PR

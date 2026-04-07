@@ -1,0 +1,2985 @@
+
+────────────────────────────────────────────────────────────
+[2026-04-07T01:32:03Z] PROMPT (571316ms):
+REVIEW DESIGN:
+
+I'll conduct a thorough exploration of this codebase. Let me start with broad structure discovery and then drill into each area in parallel.
+Now let me read all the core files in parallel to cover every area:
+Now let me read all remaining critical files in parallel:
+Let me grab the remaining files I haven't covered yet:
+Let me check the agents directory structure:
+Here is the complete, thorough analysis of the OLamo codebase across all 6 areas:
+
+---
+
+## 1. Agent Creation & Management
+
+### SDK: **`claude-agent-sdk`** (primary) + **`github-copilot-sdk`** + **`codex-app-server-sdk`** + **`openai`**
+
+**Core agent definition file:** `/Users/anil/Source/OLamo/app/agents.py`
+
+Agents are defined using `AgentDefinition` from `claude_agent_sdk`. The function `build_agents(s: AppSettings) -> dict[str, AgentDefinition]` creates **6 agent types**, each with a description, prompt (loaded from markdown), tools list, and model:
+
+| Role | Model Tier | Tools |
+|------|-----------|-------|
+| **lead-developer** | opus | Read, Glob, Grep, WebSearch, WebFetch |
+| **developer** | sonnet | Read, Write, Edit, Bash, Glob, Grep |
+| **code-reviewer** | opus | Read, Glob, Grep |
+| **qa-engineer** | opus | Read, Bash, Glob, Grep |
+| **build-agent** | haiku | Bash, Read, Glob |
+| **repo-manager** | haiku | Bash, Read |
+
+**Key data flow:**
+- `AGENT_CONFIGS` dict (line 103-106): Maps `role → (system_prompt, tools, settings_attribute)` — single source of truth for orchestrated mode
+- Character prompts loaded from `/Users/anil/Source/OLamo/agents/{role}.md` via `load_character()` in `/Users/anil/Source/OLamo/app/prompts.py`
+- Task-specific prompts from `/Users/anil/Source/OLamo/agents/prompts/{role}/{task}.md` via `load_prompt()`
+
+**Two orchestration modes** (controlled by `settings.orchestration_mode`):
+
+1. **"pm" mode** (`/Users/anil/Source/OLamo/app/pipeline/pm.py`): Uses Claude SDK's **Task tool** — a PM LLM orchestrator spawns sub-agents via `query()` with `agents=build_agents(settings)` and `allowed_tools=["Task"]`. The PM decides which agent to call and when.
+
+2. **"orchestrated" mode** (`/Users/anil/Source/OLamo/app/pipeline/orchestrated.py`): Python-driven deterministic loops. No PM LLM. Each stage/cycle is hardcoded in Python. Supports **mixed engines** (Claude + Copilot + Codex + OpenAI).
+
+---
+
+## 2. Session/Pipeline Resume Mechanism
+
+This is a **multi-layered resume system**:
+
+### Layer 1: Pipeline Checkpointing (in-memory → DB)
+**File:** `/Users/anil/Source/OLamo/app/pipeline/orchestrated.py` (lines 158-163, 231-239, 311-319, 334-342, 403-411)
+
+The `save_checkpoint` callback is invoked at key completion points:
+```python
+# Checkpoint schema:
+{
+    "completed_stage": int,    # 0=start, 1=design done, 3=commit&PR done
+    "plan": str,               # The design plan
+    "last_diff": str,          # Git diff / PR result
+    "pr_result": str,          # PR URL or result
+    "addressed_ids": list,     # PR comment IDs already addressed
+    "already_approved": list,  # Reviewers that approved
+}
+```
+
+On resume, `completed_stage` determines where to jump:
+- `< 1` → Start at Stage 1 (Design)
+- `< 3` → Start at Stage 2 (Implementation)
+- `>= 3` → Skip to Stage 3b (CI polling)
+
+### Layer 2: Database Persistence
+**File:** `/Users/anil/Source/OLamo/app/web/database.py` (lines 288-311)
+
+- `save_checkpoint(run_id, data)` → JSON-encodes and stores in `run_state.checkpoint_data`
+- `load_checkpoint(run_id)` → Retrieves checkpoint dict from DB
+
+### Layer 3: Run Status Recovery (Server Restart)
+**File:** `/Users/anil/Source/OLamo/app/web/run_manager.py` (lines 48-65, 66-76)
+
+On `setup()`:
+- All runs with status `RUNNING` → marked `INTERRUPTED`
+- Runs with status `QUEUED` → auto-re-spawned
+
+`resume(run_id)` method:
+- Changes `INTERRUPTED` → `QUEUED`
+- Clears `started_at`/`error`
+- Calls `_spawn(run)` to re-execute
+
+### Layer 4: Agent Session Resume (Copilot SDK)
+**File:** `/Users/anil/Source/OLamo/app/db/sessions.py`
+
+The `agent_sessions` table maps `(run_id, role) → session_id` with a frozen `settings_snapshot`. This enables cross-restart Copilot SDK session resume via `resume_session()`.
+
+**Session lifecycle functions:**
+- `upsert_session()` — create/update session row
+- `lookup_session()` — find active session for (run_id, role)
+- `mark_closed()` / `mark_expired()` — terminal states
+- `mark_all_closed_for_run()` — cleanup on run end
+- `prune_old_sessions()` — delete sessions older than 7 days
+
+### Layer 5: Approval Gate Resume
+**File:** `/Users/anil/Source/OLamo/app/pipeline/approval_gate.py`
+
+`ApprovalGate` uses an `asyncio.Future` to suspend pipeline execution until human approval arrives via the REST API (`POST /api/runs/{id}/approval`). Survives across requests because the gate is stored in `RunManager.pending_approvals[run_id]`.
+
+---
+
+## 3. Run Settings
+
+### Settings Hierarchy
+
+```
+config/defaults.json          ← Hardcoded defaults (constants)
+olamo-settings.json           ← User overrides (JSONC supported)
+Per-run settings_override     ← Per-run API override (merged on top)
+```
+
+### Key Classes & Files
+
+**`AppSettings`** (`/Users/anil/Source/OLamo/app/models/app_settings.py`):
+```python
+@dataclass
+class AppSettings:
+    pm_model, opus_model, sonnet_model, haiku_model: str
+    max_design_cycles, max_build_cycles, max_impl_cycles, max_pr_cycles: int
+    api_base_url: str
+    orchestration_mode: str           # "pm" or "orchestrated"
+    agent_configs: dict[str, AgentEngineConfig]
+    copilot_github_token: str
+    headless: bool
+```
+
+**`AgentEngineConfig`** (`/Users/anil/Source/OLamo/app/models/agent_engine_config.py`):
+```python
+@dataclass
+class AgentEngineConfig:
+    engine: str                       # "claude", "copilot", "codex", "openai"
+    model_config: ModelConfig
+    mcp_servers: dict
+```
+
+**`ModelConfig`** (`/Users/anil/Source/OLamo/app/models/model_config.py`):
+```python
+@dataclass
+class ModelConfig:
+    mode: str              # "simple" or "advanced"
+    model: str
+    provider_type: str     # "openai", "azure", "anthropic", "bedrock"
+    base_url: str
+    api_key: str
+    extra_params: dict
+```
+
+**`SettingsStore`** (`/Users/anil/Source/OLamo/app/settings.py`):
+- Loads from `olamo-settings.json` (JSONC with comment stripping)
+- Has **lock/unlock semantics**: while a run is active, settings are locked; updates are queued as `_pending` and applied on `unlock()`
+- `try_update()` returns `False` if locked (update deferred)
+
+**Settings binding in RunManager** (`/Users/anil/Source/OLamo/app/web/run_manager.py`, lines 163-177):
+1. Base = global `store.settings`
+2. If `run.settings_override` exists: merge scalar fields, deep-merge `agent_configs`
+3. Result passed to `run_pipeline()`
+
+**Defaults source:** `/Users/anil/Source/OLamo/config/defaults.json` — loaded into module-level constants in `/Users/anil/Source/OLamo/app/constants.py`.
+
+**REST API for settings:** `GET/PUT /api/settings` in `/Users/anil/Source/OLamo/app/web/app.py` (lines 219-236)
+
+---
+
+## 4. Database Schema (`olamo.db`)
+
+**Engine:** SQLite via **`aiosqlite`** (async), **WAL mode** enabled
+
+**4 tables** defined across 2 files:
+
+### Table: `runs` (`/Users/anil/Source/OLamo/app/web/database.py`, lines 52-63)
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | UUID |
+| `description` | TEXT | Task description |
+| `status` | TEXT | queued/running/interrupted/completed/failed |
+| `run_id` | TEXT | Human-readable YYYYMMDD_N |
+| `queued_at` | TEXT | ISO timestamp |
+| `started_at` | TEXT | ISO timestamp |
+| `completed_at` | TEXT | ISO timestamp |
+| `error` | TEXT | Error message if failed |
+| `log_dir` | TEXT | Path to log directory |
+| `pr_url` | TEXT | Pull request URL |
+| `settings_override` | TEXT | JSON per-run settings override |
+
+### Table: `events` (lines 65-82)
+| Column | Type | Description |
+|--------|------|-------------|
+| `seq` | INTEGER PK AUTOINCREMENT | Monotonically increasing sequence |
+| `run_id` | TEXT FK → runs(id) | |
+| `ts` | TEXT | ISO timestamp |
+| `data` | TEXT | Full JSON event payload |
+| `type`, `stage`, `cycle`, `role`, `action` | Various | Denormalized columns for querying |
+| `success`, `elapsed_ms` | INTEGER | |
+| `summary`, `content_path`, `pr_url` | TEXT | |
+
+**Index:** `idx_events_run(run_id, seq)`
+
+### Table: `run_state` (lines 84-94)
+| Column | Type | Description |
+|--------|------|-------------|
+| `run_id` | TEXT PK | |
+| `current_stage` | TEXT | Current pipeline stage |
+| `current_cycle` | TEXT | Current cycle info |
+| `last_agent` | TEXT | Last agent role executed |
+| `last_agent_ok` | INTEGER | Whether last agent succeeded |
+| `last_summary` | TEXT | Last agent result summary |
+| `checkpoint_data` | TEXT | JSON checkpoint blob |
+| `updated_at` | TEXT | ISO timestamp |
+
+### Table: `agent_sessions` (`/Users/anil/Source/OLamo/app/db/sessions.py`, lines 20-31)
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK AUTOINCREMENT | |
+| `run_id` | TEXT | |
+| `agent_name` | TEXT | |
+| `role` | TEXT | |
+| `session_id` | TEXT | Copilot SDK session ID |
+| `settings_snapshot` | TEXT | Frozen ModelConfig JSON |
+| `status` | TEXT | active/closed/expired |
+| `created_at` | TEXT | |
+| `closed_at` | TEXT | |
+
+**Unique constraint:** `(run_id, role)` — one session per agent per run.
+
+---
+
+## 5. Main Pipeline Flow
+
+### Entry Point: `/Users/anil/Source/OLamo/main.py`
+
+```
+main()
+├── --server mode → uvicorn.run(create_app())        # Web server (FastAPI)
+└── CLI mode   → run_pipeline_cli(task, ...)
+                 └── run_pipeline(task, settings, on_event, ...)
+                     ├── "pm" mode       → run_pipeline_pm()
+                     └── "orchestrated"  → run_pipeline_orchestrated()
+```
+
+### Orchestrated Mode Full Flow (`run_pipeline_orchestrated`):
+
+```
+┌─────────────────────────────────────────────────────┐
+│  INIT: Resolve engines (Claude/Copilot/Codex/OpenAI) │
+│         Headless? → MockEngine for all roles        │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 1: Design Loop                               │
+│  1. lead-developer creates plan from task           │
+│  2. FOR max_design_cycles:                          │
+│     a. qa-engineer REVIEW DESIGN                    │
+│     b. If APPROVED → break                          │
+│     c. lead-developer REFINE based on QA findings   │
+│  3. [Optional] Human Approval Gate                  │
+│     → Feedback loop: refine → re-QA → re-review     │
+│  4. SAVE CHECKPOINT (stage=1)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 2: Implementation Loop                       │
+│  FOR max_impl_cycles:                               │
+│    1. developer implements from plan                │
+│    2. Build Loop (max_build_cycles):                │
+│       a. build-agent builds/tests                   │
+│       b. If SUCCESS → ok                            │
+│       c. Else developer FIX BUILD FAILURE            │
+│    3. Parallel Review (code-reviewer + qa-engineer  │
+│       + lead-developer) via asyncio.gather          │
+│    4. If CRITICAL findings → re-invite approved     │
+│    5. If no NEEDS_IMPROVEMENT → break               │
+│    6. SAVE CHECKPOINT (stage=1)                     │
+│  7. repo-manager: Commit & Create PR                │
+│  8. SAVE CHECKPOINT (stage=3)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 3b: CI Check Polling (max_pr_cycles)         │
+│  1. repo-manager POLL CI CHECKS                     │
+│  2. If FAILING → developer fixes → rebuild → push  │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 4: PR Poll Loop (max_pr_cycles)              │
+│  1. repo-manager POLL PR COMMENTS                  │
+│  2. If NO ACTIONABLE → done                         │
+│  3. Extract comment IDs → MARK ADDRESSED            │
+│  4. developer addresses comments                    │
+│  5. build-agent verifies                            │
+│  6. Reviewer pass (all 3 reviewers in parallel)     │
+│  7. If findings → developer fixes → rebuild → push │
+│  8. SAVE CHECKPOINT (stage=3)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+              "Pipeline complete. PR: ..."
+```
+
+### Web Server Flow (`create_app` in `/Users/anil/Source/OLamo/app/web/app.py`):
+
+```
+FastAPI lifespan:
+  setup() → Open DB, recover stale runs, spawn queued runs
+  ↑ serve requests
+  close() → Cancel tasks, close DB
+
+API Endpoints:
+  GET  /                          → SPA index.html
+  GET  /api/events                → SSE stream (with gap-fill via Last-Event-ID)
+  GET/POST /api/runs              → List/Create runs
+  POST /api/runs/{id}/resume      → Resume interrupted run
+  GET/POST /api/runs/{id}/approval → Design approval gate
+  GET  /api/runs/{id}/events      → Event history
+  GET  /api/runs/{id}/state       → Live run state
+  GET  /api/team                  → Agent configs & pipeline stages
+  GET/PUT /api/settings           → Settings CRUD
+  GET  /api/prs                   → GitHub PR list
+  GET  /api/prs/auth              → GH auth status
+```
+
+**RunManager execution** (`_execute_run`, line 149):
+1. Set status RUNNING, create log dir
+2. Lock settings store
+3. Merge per-run settings override
+4. Load checkpoint from DB
+5. Wire up `on_event` (broadcast + DB persist + run_state update)
+6. Wire up `on_approval_required` (ApprovalGate + spec persistence)
+7. Call `run_pipeline(...)` with checkpoint + save_checkpoint callback
+8. On success → COMPLETED, on error → FAILED
+9. Unlock settings store
+
+---
+
+## 6. Agent Types in `agents/` Directory
+
+**Path:** `/Users/anil/Source/OLamo/agents/`
+
+### Character Files (system prompts):
+| File | Role | Purpose |
+|------|------|---------|
+| `lead-developer.md` | **Lead Developer** | Planning (3 modes: Plan, Refine, Review Implementation). Does NOT write code. |
+| `developer.md` | **Developer** | Code implementation exactly per spec. Fixes issues/build failures only. |
+| `code-reviewer.md` | **Code Reviewer** | Bug/security/performance/quality review after implementation. |
+| `qa-engineer.md` | **QA Engineer** | Design review (testability) + Code review (PASS/FAIL per scenario). |
+| `build-agent.md` | **Build Agent** | Deploys, builds, compiles, smoke tests. Reports SUCCESS/FAILURE. |
+| `repo-manager.md` | **Repo Manager** | 5 modes: commit+PR, poll PR comments, push changes, mark comments addressed, poll CI checks. |
+
+### Prompt Templates: `/Users/anil/Source/OLamo/agents/prompts/`
+Contains per-role task templates (e.g., `prompts/pm/pipeline.md` for the PM system prompt) with `{{token}}` placeholder substitution.
+
+---
+
+## Architecture Summary Diagram
+
+```
+main.py
+ ├── CLI  → run_pipeline_cli → run_pipeline
+ │                           ├── PM Mode (claude-agent-sdk Task tool)
+ │                           └── Orchestrated Mode (Python loops)
+ │                               ├── AgentEngine Protocol
+ │                               │   ├── ClaudeEngine (claude-agent-sdk query())
+ │                               │   ├── CopilotEngine (github-copilot-sdk sessions)
+ │                               │   ├── CodexEngine (codex-app-server-sdk threads)
+ │                               │   ├── OpenAIEngine (openai chat completions + tool loop)
+ │                               │   └── MockEngine (canned responses, no API)
+ │                               └── Checkpoint → save/load → run_state table
+ └── Server → FastAPI (uvicorn)
+             ├── RunManager (queue, execute, track, resume)
+             ├── OLamoDb (SQLite: runs/events/run_state/agent_sessions)
+             ├── SseBroadcaster (fan-out to web clients)
+             └── SettingsStore (olamo-settings.json, lock/unlock)
+```
+
+**Key patterns:**
+- **Protocol-based engines**: `AgentEngine` Protocol allows plugging in any LLM backend
+- **Event-driven**: Every agent action emits events → broadcast via SSE + persisted to DB
+- **Resumable at 4 layers**: pipeline checkpoints, DB state, run status recovery, agent sessions
+- **Concurrency control**: `asyncio.Semaphore(max_concurrent=5)` limits parallel runs
+- **Settings lock**: Global settings locked during run execution; updates deferred until unlock
+Good, I have a comprehensive overview. Let me now dive into the critical files for this integration.
+Now let me look at the engine implementations, especially how sessions are created and resumed:
+Let me also check the database module, pipeline runner, and how the PM mode works:
+Let me check for any existing session resume patterns and the models:
+Let me check the existing plan and the models:
+Let me check existing tests and the mock engine:
+Let me check existing test patterns:
+Now I have a complete understanding of the codebase. I can see that Phase 1 (foundation) is largely already implemented — `run_id`, `agent_sessions` table, protocol changes, and threading are all in place. The remaining work is the core CopilotEngine rewrite for session naming, caching, persistence, and resume. Let me create the plan.
+Now let me set up tracking:
+Here's the plan summary:
+
+## Plan: Agent SDK Session Resume Integration
+
+**Problem**: `CopilotEngine` creates a new session every agent call, disconnects immediately, never names agents, and doesn't persist session IDs — so the SDK's `resume_session()` capability is completely unused.
+
+**What's already done** (foundation is solid): `run_id` generation (`YYYYMMDD_N`), `agent_sessions` DB table with CRUD, `AgentEngine` protocol updated, `run_id` threaded through the full call stack (runner → orchestrated → engine).
+
+### Remaining work (3 phases):
+
+**Phase 2 — CopilotEngine Session Naming + Reuse** (`app/engines/copilot.py`)
+- Name agents `{runID}_{agenttype}` via `client_name` parameter
+- Add in-process session cache — create once per `(run_id, role)`, reuse across calls
+- Remove `session.disconnect()` from `finally` when `run_id` is set
+- Add `stop()` cleanup of cached sessions + `close_run(run_id)` method
+
+**Phase 3 — Persistence + Cross-Restart Resume** (`app/engines/copilot.py` + `orchestrated.py`)
+- Persist session info to `agent_sessions` table on creation/resume
+- On restart: look up active sessions → attempt `resume_session()` → fallback to fresh on failure
+- Wire `close_run()` into pipeline's finally block for clean shutdown
+
+**Phase 4 — Tests** (`tests/test_copilot_sessions.py`)
+- Session reuse (mock SDK), resume path, resume fallback, `close_run()` scoping, backward compat
+
+Full plan saved to `plan.md`. Ready to implement when you give the word.
+
+ACTIVITY:
+[01:22:44] TOOL CALL: report_intent()
+[01:22:44] TOOL CALL: task()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:52] TOOL CALL: glob()
+[01:22:59] MESSAGE: All files found. Reading all 7 files in parallel:
+[01:22:59] TOOL CALL: view()
+[01:22:59] TOOL CALL: view()
+[01:22:59] TOOL CALL: view()
+[01:22:59] TOOL CALL: view()
+[01:22:59] TOOL CALL: view()
+[01:22:59] TOOL CALL: view()
+[01:27:06] MESSAGE: Here are all six files in full:
+
+---
+
+## 1. `app/engines/copilot.py` — CopilotEngine (139 lines)
+
+This is the **current implementation** — it creates a **new session per call** and always disconnects in `finally`. The plan proposes a major rewrite to add session caching and resume logic.
+
+```python
+"""CopilotEngine — runs agents via the GitHub Copilot SDK."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import Awaitable, Callable
+
+try:
+    from copilot import CopilotClient, SubprocessConfig
+    from copilot.session import PermissionHandler
+except ImportError:
+    CopilotClient = None       # type: ignore
+    SubprocessConfig = None    # type: ignore
+    PermissionHandler = None   # type: ignore
+
+from .base import AgentEngine
+from ..models import AppSettings, ModelConfig
+
+# Default timeout: 30 minutes — enough for complex developer/build tasks.
+# Override per-agent via model_config.extra_params["timeout_seconds"].
+_DEFAULT_TIMEOUT_SECONDS = 1800
+
+
+class CopilotEngine:
+    def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+        self._client = None
+
+    async def start(self) -> None:
+        if CopilotClient is None:
+            raise SystemExit(
+                "github-copilot-sdk not installed.\n"
+                "Install:  pip install github-copilot-sdk"
+            )
+        explicit_token = (
+            self._settings.copilot_github_token
+            or os.environ.get("COPILOT_GITHUB_TOKEN")
+        )
+        self._client = CopilotClient(SubprocessConfig(github_token=explicit_token or None))
+        await self._client.start()
+
+    async def stop(self) -> None:
+        if self._client is not None:
+            await self._client.stop()
+            self._client = None
+
+    async def run(
+        self,
+        role: str,
+        prompt: str,
+        system_prompt: str,
+        tools: list[str],
+        model: str,
+        model_config: ModelConfig,
+        mcp_servers: dict[str, dict],
+        on_event: Callable[[dict], Awaitable[None]],
+        **_kwargs,
+    ) -> str:
+        kwargs: dict = {
+            "on_permission_request": PermissionHandler.approve_all,
+            "model": model or None,
+            "system_message": {"mode": "append", "content": system_prompt},
+        }
+        if mcp_servers:
+            kwargs["mcp_servers"] = mcp_servers
+        if model_config.base_url:
+            kwargs["provider"] = {
+                "type": model_config.provider_type or "openai",
+                "base_url": model_config.base_url,
+                "api_key": model_config.api_key,
+            }
+        try:
+            session = await self._client.create_session(**kwargs)
+        except Exception as e:
+            raise RuntimeError(f"CopilotEngine: failed to create session for '{role}': {e}") from e
+
+        loop = asyncio.get_running_loop()
+        idle_event = asyncio.Event()
+        error_exc: Exception | None = None
+        message_parts: list[str] = []
+
+        def _handler(event) -> None:
+            nonlocal error_exc
+            etype = event.type
+            if hasattr(etype, "value"):
+                etype = etype.value
+            if etype == "assistant.message":
+                content = str(getattr(getattr(event, "data", None), "content", "") or "")
+                if content:
+                    message_parts.append(content)
+                    asyncio.run_coroutine_threadsafe(
+                        on_event({"type": "agent_message", "role": role, "text": content}),
+                        loop,
+                    )
+            elif etype == "tool.execution_start":
+                tool_name = str(getattr(getattr(event, "data", None), "tool_name", "") or "")
+                asyncio.run_coroutine_threadsafe(
+                    on_event({"type": "agent_tool_call", "role": role, "tool_name": tool_name, "args_preview": ""}),
+                    loop,
+                )
+            elif etype == "session.idle":
+                loop.call_soon_threadsafe(idle_event.set)
+            elif etype == "session.error":
+                msg = str(getattr(getattr(event, "data", None), "message", "Unknown session error") or "")
+                error_exc = RuntimeError(f"CopilotEngine session error for '{role}': {msg}")
+                loop.call_soon_threadsafe(idle_event.set)
+
+        timeout = float((model_config.extra_params or {}).get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS))
+        unsubscribe = session.on(_handler)
+        try:
+            await session.send(prompt)
+            try:
+                await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"CopilotEngine: agent '{role}' timed out after {timeout:.0f}s. "
+                    f"Increase timeout_seconds in model_config.extra_params if needed."
+                )
+            if error_exc:
+                raise error_exc
+        finally:
+            unsubscribe()
+            await session.disconnect()
+
+        return "\n".join(message_parts)
+```
+
+**Key observation for the plan**: `**_kwargs` on line 61 already silently absorbs `run_id`, so the engine currently **accepts but ignores** it. The plan would need to change this to explicitly capture `run_id` and use it.
+
+---
+
+## 2. `app/db/sessions.py` — agent_sessions CRUD (142 lines)
+
+Already implemented and matching the plan's Phase 1 Step 5.
+
+```python
+"""agent_sessions — CRUD helpers for the agent_sessions table.
+
+Each row maps a (run_id, role) pair to a Copilot SDK session ID and a frozen
+snapshot of the ModelConfig used when the session was created.  This enables
+cross-restart session resume via ``resume_session()``.
+
+All methods accept an ``aiosqlite.Connection`` so they can share the same
+connection used by ``OLamoDb``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT    NOT NULL,
+    agent_name      TEXT    NOT NULL,
+    role            TEXT    NOT NULL,
+    session_id      TEXT    NOT NULL,
+    settings_snapshot TEXT NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'active',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    closed_at       TEXT,
+    UNIQUE(run_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_lookup
+    ON agent_sessions(run_id, role);
+"""
+
+
+async def ensure_schema(conn: "aiosqlite.Connection") -> None:  # type: ignore
+    await conn.executescript(_SCHEMA)
+    await conn.commit()
+
+
+async def upsert_session(
+    conn: "aiosqlite.Connection",
+    run_id: str, role: str, agent_name: str,
+    session_id: str, settings_snapshot: dict,
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO agent_sessions (run_id, agent_name, role, session_id, settings_snapshot)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, role) DO UPDATE SET
+            session_id       = excluded.session_id,
+            agent_name       = excluded.agent_name,
+            settings_snapshot = excluded.settings_snapshot,
+            status           = 'active',
+            closed_at        = NULL
+        """,
+        (run_id, agent_name, role, session_id, json.dumps(settings_snapshot)),
+    )
+    await conn.commit()
+
+
+async def lookup_session(
+    conn: "aiosqlite.Connection",
+    run_id: str, role: str,
+) -> dict | None:
+    async with conn.execute(
+        "SELECT session_id, status, settings_snapshot FROM agent_sessions WHERE run_id=? AND role=?",
+        (run_id, role),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "session_id": row["session_id"],
+        "status": row["status"],
+        "settings_snapshot": json.loads(row["settings_snapshot"]),
+    }
+
+
+async def mark_closed(conn, run_id: str, role: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='closed', closed_at=? WHERE run_id=? AND role=?",
+        (ts, run_id, role),
+    )
+    await conn.commit()
+
+
+async def mark_expired(conn, run_id: str, role: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='expired', closed_at=? WHERE run_id=? AND role=?",
+        (ts, run_id, role),
+    )
+    await conn.commit()
+
+
+async def mark_all_closed_for_run(conn, run_id: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='closed', closed_at=? WHERE run_id=? AND status='active'",
+        (ts, run_id),
+    )
+    await conn.commit()
+
+
+async def prune_old_sessions(conn, max_age_days: int = 7) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    cur = await conn.execute(
+        "DELETE FROM agent_sessions WHERE status IN ('closed', 'expired') AND closed_at < ?",
+        (cutoff,),
+    )
+    await conn.commit()
+    return cur.rowcount
+```
+
+---
+
+## 3. `app/pipeline/orchestrated.py` — Orchestrated Pipeline (417 lines)
+
+```python
+"""run_pipeline_orchestrated — Python-driven deterministic orchestration mode."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from ..models import (
+    AppSettings, _COPILOT_DEFAULTS, _CLAUDE_TIER, _ALL_REVIEWERS, get_default_engine_config,
+)
+from ..agents import AGENT_CONFIGS
+from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
+from .helpers import _reviewer_prompt, _extract_comment_ids
+
+
+def _write_agent_log(log_dir, role, prompt, lines, result, elapsed_ms):
+    try:
+        log_path = Path(log_dir) / f"{role}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n{'─' * 60}\n")
+            fh.write(f"[{ts}] PROMPT ({elapsed_ms}ms):\n{prompt}\n\n")
+            if lines:
+                fh.write("ACTIVITY:\n" + "\n".join(lines) + "\n\n")
+            fh.write(f"RESULT:\n{result}\n")
+    except Exception:
+        pass
+
+
+async def run_pipeline_orchestrated(
+    task: str,
+    settings: AppSettings,
+    on_event: Callable[[dict], Awaitable[None]],
+    pr_url: str = "",
+    on_approval_required: Callable[[str, str], Awaitable[dict]] | None = None,
+    checkpoint: dict | None = None,
+    save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
+    log_dir: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    engines_to_stop: list[AgentEngine] = []
+
+    if settings.headless:
+        mock_engine: AgentEngine = MockEngine(settings)
+        await mock_engine.start()
+        engines_to_stop.append(mock_engine)
+        def _resolve(role):
+            from ..models import ModelConfig
+            return mock_engine, "mock-model", ModelConfig(), {}
+    else:
+        def _engine_type(role):
+            return (settings.agent_configs.get(role) or get_default_engine_config(role, settings)).engine
+        used_engines = {_engine_type(r) for r in AGENT_CONFIGS}
+        claude_engine = ClaudeEngine(settings)
+        copilot_engine = CopilotEngine(settings) if "copilot" in used_engines else None
+        codex_engine = CodexEngine(settings) if "codex" in used_engines else None
+        openai_engine = OpenAIEngine(settings) if "openai" in used_engines else None
+
+        await claude_engine.start()
+        engines_to_stop.append(claude_engine)
+        if copilot_engine:
+            await copilot_engine.start()
+            engines_to_stop.append(copilot_engine)
+        if codex_engine:
+            await codex_engine.start()
+            engines_to_stop.append(codex_engine)
+        if openai_engine:
+            await openai_engine.start()
+            engines_to_stop.append(openai_engine)
+
+        def _resolve(role):
+            cfg = settings.agent_configs.get(role) or get_default_engine_config(role, settings)
+            if cfg.engine == "copilot" and copilot_engine: eng = copilot_engine
+            elif cfg.engine == "codex" and codex_engine: eng = codex_engine
+            elif cfg.engine == "openai" and openai_engine: eng = openai_engine
+            else: eng = claude_engine
+            model = cfg.model_config.model or (
+                _COPILOT_DEFAULTS.get(role, "") if cfg.engine == "copilot"
+                else getattr(settings, _CLAUDE_TIER.get(role, "sonnet_model"))
+            )
+            return eng, model, cfg.model_config, cfg.mcp_servers
+
+    async def call(role, prompt):
+        action = prompt[:120].strip().replace("\n", " ")
+        t0 = time.monotonic()
+        await on_event({"type": "agent_started", "role": role, "action": action})
+        system_prompt, tools, _ = AGENT_CONFIGS[role]
+        eng, model, model_config, mcp_servers = _resolve(role)
+        log_lines = []
+        async def _forwarding_on_event(evt):
+            etype = evt.get("type", "")
+            if etype == "agent_message":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] MESSAGE: {evt.get('text', '')}")
+            elif etype == "agent_tool_call":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL CALL: {evt.get('tool_name')}({evt.get('args_preview', '')})")
+            elif etype == "agent_tool_result":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL RESULT ({evt.get('tool_name')}): {evt.get('result_preview', '')}")
+            await on_event(evt)
+        try:
+            result = await eng.run(
+                role=role, prompt=prompt, system_prompt=system_prompt,
+                tools=tools, model=model, model_config=model_config,
+                mcp_servers=mcp_servers, on_event=_forwarding_on_event,
+                run_id=run_id,
+            )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            summary = result.strip() if result else ""
+            await on_event({"type": "agent_completed", "role": role, "success": True, "elapsed_ms": elapsed_ms, "summary": summary})
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, result, elapsed_ms)
+            return result
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            err_msg = str(e)[:300]
+            await on_event({"type": "agent_completed", "role": role, "success": False, "elapsed_ms": elapsed_ms, "summary": err_msg})
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, f"ERROR: {e}", elapsed_ms)
+            raise RuntimeError(f"Agent '{role}' failed: {e}") from e
+
+    async def stage(label, cycle=None):
+        await on_event({"type": "stage_changed", "stage": label, "cycle": cycle})
+
+    try:
+        completed_stage = (checkpoint or {}).get("completed_stage", 0)
+        plan = (checkpoint or {}).get("plan", task)
+        last_diff = (checkpoint or {}).get("last_diff", "")
+        pr_result = (checkpoint or {}).get("pr_result", pr_url)
+        addressed_ids = list((checkpoint or {}).get("addressed_ids", []))
+
+        if not pr_url and completed_stage < 1:
+            # Stage 1: Design
+            await stage("Stage 1: Design", cycle=0)
+            plan = await call("lead-developer", task)
+            qa_result = ""
+            qa_approved = False
+            lead_dev_response = ""
+            for i in range(settings.max_design_cycles):
+                await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
+                qa_prompt = f"REVIEW DESIGN:\n\n{plan}"
+                if lead_dev_response:
+                    qa_prompt += f"\n\n---\n\nLead developer's per-finding response from last revision:\n{lead_dev_response}"
+                qa_result = await call("qa-engineer", qa_prompt)
+                if "APPROVED" in qa_result.upper():
+                    qa_approved = True
+                    break
+                if i < settings.max_design_cycles - 1:
+                    lead_dev_response = await call("lead-developer", f"Task:\n{task}\n\nCurrent Plan:\n{plan}\n\nQA Findings:\n{qa_result}")
+                    plan = lead_dev_response
+
+            qa_section = ""
+            if qa_result:
+                status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns (max cycles reached)"
+                qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+            spec_for_review = plan + qa_section
+
+            # Optional human approval gate
+            if on_approval_required is not None and not settings.headless:
+                dev_response = ""
+                while True:
+                    gate_result = await on_approval_required(spec_for_review, dev_response)
+                    if gate_result.get("approved"):
+                        break
+                    feedback = gate_result.get("feedback", "")
+                    comments = gate_result.get("comments", [])
+                    if feedback or comments:
+                        comment_text = ""
+                        if comments:
+                            comment_lines = "\n".join(f"- [{c.get('selectedText', '')}]: {c.get('commentText', '')}" for c in comments)
+                            comment_text = f"\n\nInline comments:\n{comment_lines}"
+                        plan = await call("lead-developer",
+                            f"REFINE the following plan based on human feedback.\n\nPlan:\n{plan}\n\nFeedback:\n{feedback}{comment_text}")
+                        qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
+                        qa_approved = "APPROVED" in qa_result.upper()
+                        qa_section = ""
+                        if qa_result:
+                            status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns"
+                            qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+                        spec_for_review = plan + qa_section
+                        dev_response = plan[:300].strip()
+
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 1, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        if not pr_url and completed_stage < 3:
+            # Stage 2: Implementation
+            await stage("Stage 2: Implementation", cycle=0)
+            findings = ""
+            already_approved = set()
+            for impl_cycle in range(settings.max_impl_cycles):
+                await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}", cycle=impl_cycle + 1)
+                impl_prompt = plan if not findings else f"{plan}\n\nReview findings to address:\n{findings}"
+                dev_response = await call("developer", impl_prompt)
+
+                build_ok = False
+                build_output = ""
+                for build_cycle in range(settings.max_build_cycles):
+                    build_output = await call("build-agent", "Build and test the project.")
+                    if "SUCCESS" in build_output.upper():
+                        build_ok = True
+                        break
+                    if build_cycle < settings.max_build_cycles - 1:
+                        dev_response = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                if not build_ok:
+                    findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
+                    break
+
+                diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+                dev_response_ctx = f"\n\nDeveloper's per-finding response:\n{dev_response}" if dev_response and findings else ""
+                pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
+
+                reviewer_results = {}
+                if pending:
+                    results = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in pending])
+                    for role, result in zip(pending, results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" not in result.upper():
+                            already_approved.add(role)
+
+                combined = "\n".join(reviewer_results.values())
+                has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
+                if has_critical and already_approved:
+                    reinvite = list(already_approved)
+                    re_results = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in reinvite])
+                    for role, result in zip(reinvite, re_results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" in result.upper():
+                            already_approved.discard(role)
+                elif already_approved:
+                    await on_event({"type": "agent_message", "role": "orchestrator",
+                        "text": f"Skipping approved reviewer(s): {', '.join(sorted(already_approved))}"})
+
+                findings = "\n\n---\n\n".join(r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper())
+                if save_checkpoint:
+                    await save_checkpoint({"completed_stage": 1, "plan": plan, "last_diff": last_diff,
+                        "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": list(already_approved)})
+                if not findings:
+                    break
+
+            # Stage 3: Commit & PR
+            await stage("Stage 3: Commit & PR", cycle=0)
+            pr_result = await call("repo-manager",
+                f"Commit all changes and create a Pull Request.\n"
+                f"Branch: feature/{re.sub(r'[^a-z0-9]+', '-', task[:50].lower()).strip('-')}\n"
+                f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.")
+            last_diff = pr_result
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 3, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        elif not pr_url and completed_stage >= 3:
+            await on_event({"type": "agent_message", "role": "orchestrator",
+                "text": f"Resuming from Stage 3b (Stage 1-3 already completed). PR: {pr_result[:100]}"})
+
+        # Stage 3b: CI Check Polling
+        for ci_cycle in range(settings.max_pr_cycles):
+            await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}", cycle=ci_cycle + 1)
+            check_result = await call("repo-manager", "POLL CI CHECKS")
+            if "CHECKS PASSING" in check_result.upper():
+                break
+            await call("developer", f"Fix the following CI check failures:\n{check_result}")
+            build_output = await call("build-agent", "Build and test the project.")
+            if "FAILURE" in build_output.upper():
+                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                await call("build-agent", "Build and test the project.")
+            last_diff = await call("repo-manager", "PUSH CHANGES")
+
+        # Stage 4: PR Poll Loop
+        await stage("Stage 4: PR Poll", cycle=0)
+        for pr_cycle in range(settings.max_pr_cycles):
+            await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}", cycle=pr_cycle + 1)
+            exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
+            poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
+            if "NO ACTIONABLE COMMENTS" in poll_result.upper():
+                break
+            new_ids = _extract_comment_ids(poll_result)
+            if new_ids:
+                addressed_ids.extend(new_ids)
+                await call("repo-manager", f"MARK COMMENTS ADDRESSED: {', '.join(new_ids)}")
+            await call("developer", f"Address the following PR review comments:\n{poll_result}")
+            build_output = await call("build-agent", "Build and test the project.")
+            if "FAILURE" in build_output.upper():
+                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                await call("build-agent", "Build and test the project.")
+            diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+            reviews = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in _ALL_REVIEWERS])
+            review_findings = "\n\n---\n\n".join(r for r in reviews if "NEEDS IMPROVEMENT" in r.upper())
+            if review_findings:
+                await call("developer", f"Address review findings before pushing:\n{review_findings}")
+                build_output = await call("build-agent", "Build and test the project.")
+                if "FAILURE" in build_output.upper():
+                    await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                    await call("build-agent", "Build and test the project.")
+            last_diff = await call("repo-manager", "PUSH CHANGES")
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 3, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        return f"Pipeline complete. PR: {pr_result[:200]}"
+    finally:
+        for eng in engines_to_stop:
+            await eng.stop()
+```
+
+**Key observation**: `run_id` is already threaded through (line 49 parameter, line 137 passed to `eng.run()`). However, the `finally` block (line 415) only calls `eng.stop()` — it does **not** call `copilot_engine.close_run(run_id)` as the plan proposes.
+
+---
+
+## 4. `app/web/run_manager.py` — RunManager (265 lines)
+
+```python
+"""RunManager — queues, executes, and tracks pipeline runs (parallel + resumable)."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from dataclasses import asdict, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from ..models import AppSettings, RunRecord, RunStatus, _agent_engine_config_from_dict
+from ..pipeline.helpers import ApprovalGate, _parse_stage_announcement
+from ..pipeline.runner import run_pipeline
+from .broadcaster import SseBroadcaster
+from .database import OLamoDb
+
+logger = logging.getLogger(__name__)
+_DEFAULT_MAX_CONCURRENT = 5
+_run_id_lock = asyncio.Lock()
+
+
+class RunManager:
+    def __init__(self, broadcaster, store, db_path="olamo.db", max_concurrent=5):
+        self._broadcaster = broadcaster
+        self._store = store
+        self._db = OLamoDb(db_path)
+        self._runs = {}
+        self._active_tasks = {}
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self.pending_approvals = {}
+
+    async def setup(self):
+        await self._db.open()
+        for run in await self._db.get_all_runs():
+            self._runs[run.id] = run
+            if run.status == RunStatus.RUNNING:
+                run.status = RunStatus.INTERRUPTED
+                await self._db.upsert_run(run)
+                await self._db.upsert_run_state(run.id, current_stage="interrupted")
+            elif run.status == RunStatus.QUEUED:
+                self._spawn(run)
+
+    async def resume(self, run_id):
+        run = self._runs.get(run_id)
+        if run is None or run.status != RunStatus.INTERRUPTED:
+            return None
+        run.status = RunStatus.QUEUED
+        run.started_at = None
+        run.error = None
+        await self._db.upsert_run(run)
+        self._spawn(run)
+        return run
+
+    async def close(self):
+        for task in list(self._active_tasks.values()):
+            task.cancel()
+        if self._active_tasks:
+            await asyncio.gather(*self._active_tasks.values(), return_exceptions=True)
+        await self._db.close()
+
+    async def enqueue(self, description, pr_url="", settings_override=None):
+        run_id = await self._next_run_id(self._db._conn)
+        run = RunRecord(
+            id=str(uuid.uuid4()), description=description,
+            run_id=run_id, pr_url=pr_url,
+            settings_override=settings_override or {},
+        )
+        self._runs[run.id] = run
+        await self._db.upsert_run(run)
+        await self._db.insert_event(run.id, {"type": "run_queued", "run_id": run.id, "description": description})
+        await self._broadcaster.broadcast({"type": "run_queued", "run_id": run.id, "description": description})
+        self._spawn(run)
+        return run
+
+    def _spawn(self, run):
+        task = asyncio.create_task(self._run_with_semaphore(run), name=f"run-{run.id}")
+        self._active_tasks[run.id] = task
+        task.add_done_callback(lambda _: self._active_tasks.pop(run.id, None))
+
+    async def _run_with_semaphore(self, run):
+        async with self._semaphore:
+            await self._execute_run(run)
+
+    async def get_run_events(self, run_id): return await self._db.get_events(run_id)
+    async def get_run_state(self, run_id): return await self._db.get_run_state(run_id)
+    async def get_event_content_path(self, run_id, seq): return await self._db.get_event_content_path(run_id, seq)
+
+    @property
+    def all_runs(self): return sorted(self._runs.values(), key=lambda r: r.queued_at, reverse=True)
+    def get_run(self, run_id): return self._runs.get(run_id)
+    def start(self): pass
+
+    @staticmethod
+    async def _next_run_id(conn):
+        date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
+        async with _run_id_lock:
+            cursor = await conn.execute(
+                "SELECT MAX(CAST(SUBSTR(run_id, 10) AS INTEGER)) FROM runs WHERE run_id LIKE ?",
+                (f"{date_part}%",),
+            )
+            row = await cursor.fetchone()
+            current_max = row[0] if row and row[0] is not None else 0
+            return f"{date_part}_{current_max + 1}"
+
+    async def _execute_run(self, run):
+        run.status = RunStatus.RUNNING
+        run.started_at = datetime.now(timezone.utc).isoformat()
+        log_dir = Path("logs") / (run.run_id or run.id)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        run.log_dir = str(log_dir)
+        await self._db.upsert_run(run)
+        await self._db.upsert_run_state(run.id, current_stage="running")
+        await self._store.lock()
+
+        started_evt = {"type": "run_started", "run_id": run.id}
+        await self._broadcaster.broadcast(started_evt)
+        await self._db.insert_event(run.id, started_evt)
+
+        # Settings override
+        base = self._store.settings
+        if run.settings_override:
+            fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
+            filtered = {k: v for k, v in run.settings_override.items() if k in fields}
+            base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
+            settings = AppSettings(**{**base_dict, **filtered}, agent_configs=base.agent_configs)
+            run_agent_overrides = run.settings_override.get("agent_configs", {})
+            if run_agent_overrides:
+                merged_agents = dict(settings.agent_configs)
+                for role, cfg_dict in run_agent_overrides.items():
+                    merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
+                settings = replace(settings, agent_configs=merged_agents)
+        else:
+            settings = base
+
+        checkpoint = await self._db.load_checkpoint(run.id)
+        gate = ApprovalGate()
+        self.pending_approvals[run.id] = gate
+
+        async def on_event(evt):
+            await self._broadcaster.broadcast(evt)
+            seq = await self._db.insert_event(run.id, evt)
+            evt_type = evt.get("type")
+            if evt_type == "stage_changed":
+                stage = evt["stage"]
+                cycle_info = _parse_stage_announcement(stage)
+                await self._db.upsert_run_state(run.id, current_stage=stage, current_cycle=cycle_info)
+            elif evt_type == "agent_started":
+                await self._db.upsert_run_state(run.id, last_agent=evt.get("role"))
+            elif evt_type == "agent_completed":
+                await self._db.upsert_run_state(run.id, last_agent=evt.get("role"),
+                    last_agent_ok=evt.get("success"), last_summary=evt.get("summary"))
+            evt["seq"] = seq
+
+        async def on_approval_required(spec, developer_response=""):
+            content_dir = log_dir / "content"
+            content_dir.mkdir(parents=True, exist_ok=True)
+            spec_summary = spec[:300].rstrip()
+            evt = {"type": "awaiting_approval", "run_id": run.id,
+                "specSummary": spec_summary, "developerResponse": developer_response[:300] if developer_response else ""}
+            seq = await self._db.insert_event(run.id, evt)
+            spec_path = content_dir / f"spec-{seq}.md"
+            spec_path.write_text(spec, encoding="utf-8")
+            await self._db.update_event_content_path(run_id=run.id, seq=seq, content_path=str(spec_path))
+            evt["seq"] = seq
+            await self._broadcaster.broadcast(evt)
+            result = await gate.wait(spec)
+            if result.get("approved"):
+                approval_evt = {"type": "design_approval_received", "run_id": run.id}
+                await self._db.insert_event(run.id, approval_evt)
+                await self._broadcaster.broadcast(approval_evt)
+            return result
+
+        async def save_ckpt(data):
+            await self._db.save_checkpoint(run.id, data)
+
+        try:
+            result = await run_pipeline(
+                run.description, settings, on_event,
+                pr_url=run.pr_url, on_approval_required=on_approval_required,
+                checkpoint=checkpoint, save_checkpoint=save_ckpt,
+                log_dir=str(log_dir), run_id=run.run_id or None,
+            )
+            run.status = RunStatus.COMPLETED
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            await self._db.upsert_run(run)
+            await self._db.upsert_run_state(run.id, current_stage="completed")
+            completed_evt = {"type": "run_completed", "run_id": run.id, "status": "completed", "result": result[:500]}
+            await self._broadcaster.broadcast(completed_evt)
+            await self._db.insert_event(run.id, completed_evt)
+        except Exception as e:
+            run.status = RunStatus.FAILED
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            run.error = str(e)
+            await self._db.upsert_run(run)
+            await self._db.upsert_run_state(run.id, current_stage="failed")
+            failed_evt = {"type": "run_completed", "run_id": run.id, "status": "failed", "error": str(e)}
+            await self._broadcaster.broadcast(failed_evt)
+            await self._db.insert_event(run.id, failed_evt)
+        finally:
+            self.pending_approvals.pop(run.id, None)
+            await self._store.unlock()
+```
+
+---
+
+## 5. `app/engines/base.py` — AgentEngine Protocol (25 lines)
+
+```python
+"""AgentEngine Protocol — the common interface all engine implementations must satisfy."""
+
+from __future__ import annotations
+
+from typing import Awaitable, Callable, Protocol
+
+from ..models import AppSettings, ModelConfig
+
+
+class AgentEngine(Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+    async def run(
+        self,
+        role: str,
+        prompt: str,
+        system_prompt: str,
+        tools: list[str],
+        model: str,
+        model_config: ModelConfig,
+        mcp_servers: dict[str, dict],
+        on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
+    ) -> str: ...
+```
+
+The protocol already has `run_id: str | None = None` — Phase 1 Step 2 is **done**.
+
+---
+
+## 6. `agents/prompts/lead-developer/plan.md` — The Integration Plan (474 lines)
+
+This is the **Copilot SDK Session Resume Integration** plan (revised). It's located at `agents/prompts/lead-developer/plan.md`. The full content was shown above — it covers:
+
+- **Problem**: New session per call, no context reuse, no cross-restart resume
+- **Two sub-features**: (A) In-process session reuse (cache by `run_id+role`), (B) Cross-restart resume via DB + `resume_session()`
+- **Data model**: `agent_sessions` table (already implemented in `app/db/sessions.py`)
+- **Protocol changes**: `run_id` kwarg on `AgentEngine.run()` (already done)
+- **CopilotEngine rewrite**: Session cache, `close_run()`, fallback logic
+- **4-phase implementation plan**: Foundation → In-process reuse → Cross-restart resume → Testing
+- **Edge cases**: Expired sessions, concurrent runs, process kills, DB unavailability
+
+---
+
+## Summary: What's Done vs. What Remains
+
+| Plan Phase | Step | Status |
+|---|---|---|
+| **Phase 1** | `run_id` on `RunRecord` | ✅ Done |
+| **Phase 1** | `run_id` on `AgentEngine` protocol | ✅ Done |
+| **Phase 1** | Thread `run_id` through pipeline | ✅ Done |
+| **Phase 1** | `agent_sessions` table + CRUD | ✅ Done (`app/db/sessions.py`) |
+| **Phase 1** | Run ID generation (`YYYYMMDD_N`) | ✅ Done (in `RunManager`) |
+| **Phase 2** | `CopilotEngine` session cache (`self._sessions`) | ❌ **Not done** — still creates new session per call |
+| **Phase 2** | `close_run(run_id)` method | ❌ **Not done** |
+| **Phase 2** | Wire `close_run()` into orchestrated `finally` | ❌ **Not done** — `finally` only calls `eng.stop()` |
+| **Phase 3** | Persist session info to DB on creation | ❌ **Not done** |
+| **Phase 3** | Resume lookup + `resume_session()` | ❌ **Not done** |
+| **Phase 3** | Lifecycle (mark closed/expired, prune) | ❌ **Not done** (DB helpers exist but aren't wired) |
+
+The **foundation is fully laid** — all plumbing is in place. The remaining work is concentrated entirely in `CopilotEngine.run()` (the rewrite to cache/resume sessions) and the `finally` block in `orchestrated.py`.
+[01:27:13] TOOL CALL: bash()
+[01:28:09] TOOL CALL: bash()
+[01:28:09] TOOL CALL: bash()
+[01:28:18] MESSAGE: Let me read the actual source files directly instead of the intermediate output:
+[01:28:18] TOOL CALL: view()
+[01:28:18] TOOL CALL: view()
+[01:28:18] TOOL CALL: view()
+[01:28:18] TOOL CALL: view()
+[01:28:18] TOOL CALL: view()
+[01:28:25] TOOL CALL: view()
+[01:28:25] TOOL CALL: view()
+[01:28:25] TOOL CALL: view()
+[01:28:25] TOOL CALL: view()
+[01:28:25] TOOL CALL: view()
+[01:28:31] MESSAGE: Now let me read the plan.md file and the existing tests:
+[01:28:31] TOOL CALL: glob()
+[01:28:31] TOOL CALL: glob()
+[01:28:31] TOOL CALL: view()
+[01:28:31] TOOL CALL: view()
+[01:28:37] TOOL CALL: view()
+[01:28:37] TOOL CALL: view()
+[01:28:43] TOOL CALL: view()
+[01:28:49] TOOL CALL: view()
+[01:28:56] MESSAGE: Now I have a thorough understanding of the entire codebase and the proposed plan. Let me verify one more thing about how `close_run` should be wired:
+[01:28:56] TOOL CALL: grep()
+[01:29:02] MESSAGE: Let me now read the actual plan file that was created:
+[01:29:02] TOOL CALL: view()
+[01:32:03] MESSAGE: Now I have a complete picture of the current codebase and the proposed plan. Let me conduct the design review.
+
+---
+
+## Design Review: Agent SDK Session Resume Integration
+
+### Context
+
+I'm reviewing the plan at `agents/prompts/lead-developer/plan.md` for adding session reuse and cross-restart resume to `CopilotEngine`. Phase 1 (foundation: `run_id`, `AgentEngine` protocol, `agent_sessions` table, threading) is already implemented and verified in the codebase. I'm reviewing the remaining Phases 2–4.
+
+---
+
+### Finding 1: 🔴 Critical — No DB Access Path for `CopilotEngine`
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` and `_should_resume()` pseudocode
+
+**Problem:** The plan shows `CopilotEngine.run()` calling `lookup_session_id()`, `upsert_agent_session()`, `mark_session_expired()`, and `_prune_old_sessions()` — but **never specifies how the engine obtains a DB connection**.
+
+Currently `CopilotEngine.__init__` only receives `AppSettings`. The `aiosqlite.Connection` is owned by `OLamoDb`, which is owned by `RunManager`. The `run()` method signature on the protocol is already frozen and does not include a DB parameter. The pseudocode references `db_query()` as if it's a global — it isn't.
+
+**Fix:** The plan must specify one of:
+- **(a)** Pass `conn` (or a thin wrapper interface) to `CopilotEngine.__init__` or `start()`
+- **(b)** Give `CopilotEngine` its own `aiosqlite.connect()` to `olamo.db` (works due to WAL mode concurrent readers)
+- **(c)** Thread a `session_store` abstraction through the engine's constructor
+
+Option (b) is simplest and consistent with WAL mode, but the plan must explicitly state this and handle connection lifecycle (open in `start()`, close in `stop()`).
+
+---
+
+### Finding 2: 🔴 Critical — `close_run()` Cannot Be Called on Protocol-Typed Variable
+
+**File/Section:** Plan § "Implementation Steps" step 10, `orchestrated.py` line 73
+
+**Problem:** In `orchestrated.py`, `copilot_engine` is typed as `AgentEngine | None`:
+```python
+copilot_engine: AgentEngine | None = CopilotEngine(settings) if "copilot" in used_engines else None
+```
+`close_run(run_id)` is not on the `AgentEngine` protocol. Calling `copilot_engine.close_run(run_id)` is a **type error**. The plan says "call `copilot_engine.close_run(run_id)` if copilot_engine exists and run_id is set" but doesn't address this conformance gap.
+
+**Fix:** The plan must specify one of:
+- **(a)** Add `async def close_run(self, run_id: str) -> None: ...` to `AgentEngine` protocol (no-op in all other 4 engines) — cleanest
+- **(b)** Narrow the type: `copilot_engine: CopilotEngine | None = ...`
+- **(c)** Use `isinstance(copilot_engine, CopilotEngine)` guard in the finally block
+
+Recommend **(a)** — it's explicit, type-safe, and the no-op cost in other engines is one empty method each.
+
+---
+
+### Finding 3: 🟡 Significant — Pseudocode Uses Wrong SDK API
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` pseudocode (line 199)
+
+**Problem:** The pseudocode shows:
+```python
+event = await session.send_and_wait(prompt, timeout=600.0)
+result = extract_content(event)
+```
+
+But the **actual** `CopilotEngine.run()` uses an event-driven pattern:
+```python
+unsubscribe = session.on(_handler)
+await session.send(prompt)
+await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+```
+
+These are fundamentally different APIs. `send_and_wait` doesn't exist in the real engine (only in the mock test helpers). The plan's pseudocode misrepresents what needs to change, making it ambiguous whether the rewrite should switch APIs or keep the event-driven approach with session reuse.
+
+**Fix:** Rewrite the pseudocode to match the actual event-driven pattern, showing:
+- Where `session.on(_handler)` is registered (once per creation? per call?)
+- Where `unsubscribe()` happens (per call, but without `disconnect()`)
+- How `idle_event` resets between reused calls
+
+---
+
+### Finding 4: 🟡 Significant — Event Handler Lifecycle Not Specified for Reused Sessions
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` method
+
+**Problem:** The current code registers a new `_handler` closure per `run()` call via `session.on(_handler)`. Each handler captures its own `on_event` callback, `message_parts`, `idle_event`, and `error_exc`. With session reuse:
+- Must the handler be registered once (at creation) or per-call?
+- If per-call: `unsubscribe()` must still happen in `finally`, but `disconnect()` must not
+- If once: the handler's captured `on_event` from the first call would be stale on subsequent calls (the `_forwarding_on_event` wrapper in `orchestrated.py` captures fresh `log_lines` each time)
+
+The plan doesn't address this. Getting it wrong means either leaked handlers or stale callbacks.
+
+**Fix:** Specify that the event handler is registered **per-call** (not per-session), matching the current pattern. Update the `finally` block to:
+```python
+finally:
+    unsubscribe()                    # always clean up handler
+    if run_id is None:              # legacy path
+        await session.disconnect()
+```
+
+---
+
+### Finding 5: 🟡 Significant — `settings_snapshot` Serialization Underspecified
+
+**File/Section:** Plan § "Data Model" — `settings_snapshot` column
+
+**Problem:** The plan says `settings_snapshot` stores "only the per-agent `ModelConfig` as JSON". But `ModelConfig` is a dataclass with `extra_params: dict`. The plan doesn't specify:
+- What serialization format? (`dataclasses.asdict()`? Manual?)
+- What happens on deserialization if `ModelConfig` schema changes between server restarts?
+- Is the snapshot compared on resume to detect incompatible settings?
+
+Without this, the resume path may fail silently or with opaque errors.
+
+**Fix:** Specify that `dataclasses.asdict(model_config)` is used for serialization, and on resume, the snapshot is logged but **not** validated against current settings (the SDK handles its own compatibility check). If resume fails, fallback handles it.
+
+---
+
+### Finding 6: 🟢 Minor — `_prune_old_sessions()` at Startup Has DB Dependency
+
+**File/Section:** Plan § "Data Model" — cleanup policy
+
+**Problem:** The plan says "Called once at startup in `CopilotEngine.start()`" but Finding 1 shows the engine has no DB access at startup. This is dependent on resolving Finding 1.
+
+**Fix:** Once DB access is resolved (Finding 1), specify prune timing. If using option (b) from Finding 1 (dedicated connection), `start()` is fine. Otherwise, move pruning to `RunManager.setup()`.
+
+---
+
+### Summary Verdict
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | 🔴 Critical | No DB access path for CopilotEngine |
+| 2 | 🔴 Critical | `close_run()` not callable on protocol-typed variable |
+| 3 | 🟡 Significant | Pseudocode uses `send_and_wait` instead of actual event-driven API |
+| 4 | 🟡 Significant | Event handler lifecycle not specified for reused sessions |
+| 5 | 🟡 Significant | `settings_snapshot` serialization/deserialization underspecified |
+| 6 | 🟢 Minor | Prune timing depends on DB access resolution |
+
+---
+
+**NEEDS IMPROVEMENT: Findings 1 and 2 are blocking — they represent real architectural gaps that will cause implementation to stall or produce incorrect code. Findings 3–5 are significant but could be resolved during implementation if the engineer is careful; however, they should be addressed in the plan for clarity.**
+
+RESULT:
+All files found. Reading all 7 files in parallel:
+Here are all six files in full:
+
+---
+
+## 1. `app/engines/copilot.py` — CopilotEngine (139 lines)
+
+This is the **current implementation** — it creates a **new session per call** and always disconnects in `finally`. The plan proposes a major rewrite to add session caching and resume logic.
+
+```python
+"""CopilotEngine — runs agents via the GitHub Copilot SDK."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import Awaitable, Callable
+
+try:
+    from copilot import CopilotClient, SubprocessConfig
+    from copilot.session import PermissionHandler
+except ImportError:
+    CopilotClient = None       # type: ignore
+    SubprocessConfig = None    # type: ignore
+    PermissionHandler = None   # type: ignore
+
+from .base import AgentEngine
+from ..models import AppSettings, ModelConfig
+
+# Default timeout: 30 minutes — enough for complex developer/build tasks.
+# Override per-agent via model_config.extra_params["timeout_seconds"].
+_DEFAULT_TIMEOUT_SECONDS = 1800
+
+
+class CopilotEngine:
+    def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+        self._client = None
+
+    async def start(self) -> None:
+        if CopilotClient is None:
+            raise SystemExit(
+                "github-copilot-sdk not installed.\n"
+                "Install:  pip install github-copilot-sdk"
+            )
+        explicit_token = (
+            self._settings.copilot_github_token
+            or os.environ.get("COPILOT_GITHUB_TOKEN")
+        )
+        self._client = CopilotClient(SubprocessConfig(github_token=explicit_token or None))
+        await self._client.start()
+
+    async def stop(self) -> None:
+        if self._client is not None:
+            await self._client.stop()
+            self._client = None
+
+    async def run(
+        self,
+        role: str,
+        prompt: str,
+        system_prompt: str,
+        tools: list[str],
+        model: str,
+        model_config: ModelConfig,
+        mcp_servers: dict[str, dict],
+        on_event: Callable[[dict], Awaitable[None]],
+        **_kwargs,
+    ) -> str:
+        kwargs: dict = {
+            "on_permission_request": PermissionHandler.approve_all,
+            "model": model or None,
+            "system_message": {"mode": "append", "content": system_prompt},
+        }
+        if mcp_servers:
+            kwargs["mcp_servers"] = mcp_servers
+        if model_config.base_url:
+            kwargs["provider"] = {
+                "type": model_config.provider_type or "openai",
+                "base_url": model_config.base_url,
+                "api_key": model_config.api_key,
+            }
+        try:
+            session = await self._client.create_session(**kwargs)
+        except Exception as e:
+            raise RuntimeError(f"CopilotEngine: failed to create session for '{role}': {e}") from e
+
+        loop = asyncio.get_running_loop()
+        idle_event = asyncio.Event()
+        error_exc: Exception | None = None
+        message_parts: list[str] = []
+
+        def _handler(event) -> None:
+            nonlocal error_exc
+            etype = event.type
+            if hasattr(etype, "value"):
+                etype = etype.value
+            if etype == "assistant.message":
+                content = str(getattr(getattr(event, "data", None), "content", "") or "")
+                if content:
+                    message_parts.append(content)
+                    asyncio.run_coroutine_threadsafe(
+                        on_event({"type": "agent_message", "role": role, "text": content}),
+                        loop,
+                    )
+            elif etype == "tool.execution_start":
+                tool_name = str(getattr(getattr(event, "data", None), "tool_name", "") or "")
+                asyncio.run_coroutine_threadsafe(
+                    on_event({"type": "agent_tool_call", "role": role, "tool_name": tool_name, "args_preview": ""}),
+                    loop,
+                )
+            elif etype == "session.idle":
+                loop.call_soon_threadsafe(idle_event.set)
+            elif etype == "session.error":
+                msg = str(getattr(getattr(event, "data", None), "message", "Unknown session error") or "")
+                error_exc = RuntimeError(f"CopilotEngine session error for '{role}': {msg}")
+                loop.call_soon_threadsafe(idle_event.set)
+
+        timeout = float((model_config.extra_params or {}).get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS))
+        unsubscribe = session.on(_handler)
+        try:
+            await session.send(prompt)
+            try:
+                await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"CopilotEngine: agent '{role}' timed out after {timeout:.0f}s. "
+                    f"Increase timeout_seconds in model_config.extra_params if needed."
+                )
+            if error_exc:
+                raise error_exc
+        finally:
+            unsubscribe()
+            await session.disconnect()
+
+        return "\n".join(message_parts)
+```
+
+**Key observation for the plan**: `**_kwargs` on line 61 already silently absorbs `run_id`, so the engine currently **accepts but ignores** it. The plan would need to change this to explicitly capture `run_id` and use it.
+
+---
+
+## 2. `app/db/sessions.py` — agent_sessions CRUD (142 lines)
+
+Already implemented and matching the plan's Phase 1 Step 5.
+
+```python
+"""agent_sessions — CRUD helpers for the agent_sessions table.
+
+Each row maps a (run_id, role) pair to a Copilot SDK session ID and a frozen
+snapshot of the ModelConfig used when the session was created.  This enables
+cross-restart session resume via ``resume_session()``.
+
+All methods accept an ``aiosqlite.Connection`` so they can share the same
+connection used by ``OLamoDb``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT    NOT NULL,
+    agent_name      TEXT    NOT NULL,
+    role            TEXT    NOT NULL,
+    session_id      TEXT    NOT NULL,
+    settings_snapshot TEXT NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'active',
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    closed_at       TEXT,
+    UNIQUE(run_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_lookup
+    ON agent_sessions(run_id, role);
+"""
+
+
+async def ensure_schema(conn: "aiosqlite.Connection") -> None:  # type: ignore
+    await conn.executescript(_SCHEMA)
+    await conn.commit()
+
+
+async def upsert_session(
+    conn: "aiosqlite.Connection",
+    run_id: str, role: str, agent_name: str,
+    session_id: str, settings_snapshot: dict,
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO agent_sessions (run_id, agent_name, role, session_id, settings_snapshot)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, role) DO UPDATE SET
+            session_id       = excluded.session_id,
+            agent_name       = excluded.agent_name,
+            settings_snapshot = excluded.settings_snapshot,
+            status           = 'active',
+            closed_at        = NULL
+        """,
+        (run_id, agent_name, role, session_id, json.dumps(settings_snapshot)),
+    )
+    await conn.commit()
+
+
+async def lookup_session(
+    conn: "aiosqlite.Connection",
+    run_id: str, role: str,
+) -> dict | None:
+    async with conn.execute(
+        "SELECT session_id, status, settings_snapshot FROM agent_sessions WHERE run_id=? AND role=?",
+        (run_id, role),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "session_id": row["session_id"],
+        "status": row["status"],
+        "settings_snapshot": json.loads(row["settings_snapshot"]),
+    }
+
+
+async def mark_closed(conn, run_id: str, role: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='closed', closed_at=? WHERE run_id=? AND role=?",
+        (ts, run_id, role),
+    )
+    await conn.commit()
+
+
+async def mark_expired(conn, run_id: str, role: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='expired', closed_at=? WHERE run_id=? AND role=?",
+        (ts, run_id, role),
+    )
+    await conn.commit()
+
+
+async def mark_all_closed_for_run(conn, run_id: str) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    await conn.execute(
+        "UPDATE agent_sessions SET status='closed', closed_at=? WHERE run_id=? AND status='active'",
+        (ts, run_id),
+    )
+    await conn.commit()
+
+
+async def prune_old_sessions(conn, max_age_days: int = 7) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    cur = await conn.execute(
+        "DELETE FROM agent_sessions WHERE status IN ('closed', 'expired') AND closed_at < ?",
+        (cutoff,),
+    )
+    await conn.commit()
+    return cur.rowcount
+```
+
+---
+
+## 3. `app/pipeline/orchestrated.py` — Orchestrated Pipeline (417 lines)
+
+```python
+"""run_pipeline_orchestrated — Python-driven deterministic orchestration mode."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from ..models import (
+    AppSettings, _COPILOT_DEFAULTS, _CLAUDE_TIER, _ALL_REVIEWERS, get_default_engine_config,
+)
+from ..agents import AGENT_CONFIGS
+from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
+from .helpers import _reviewer_prompt, _extract_comment_ids
+
+
+def _write_agent_log(log_dir, role, prompt, lines, result, elapsed_ms):
+    try:
+        log_path = Path(log_dir) / f"{role}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n{'─' * 60}\n")
+            fh.write(f"[{ts}] PROMPT ({elapsed_ms}ms):\n{prompt}\n\n")
+            if lines:
+                fh.write("ACTIVITY:\n" + "\n".join(lines) + "\n\n")
+            fh.write(f"RESULT:\n{result}\n")
+    except Exception:
+        pass
+
+
+async def run_pipeline_orchestrated(
+    task: str,
+    settings: AppSettings,
+    on_event: Callable[[dict], Awaitable[None]],
+    pr_url: str = "",
+    on_approval_required: Callable[[str, str], Awaitable[dict]] | None = None,
+    checkpoint: dict | None = None,
+    save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
+    log_dir: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    engines_to_stop: list[AgentEngine] = []
+
+    if settings.headless:
+        mock_engine: AgentEngine = MockEngine(settings)
+        await mock_engine.start()
+        engines_to_stop.append(mock_engine)
+        def _resolve(role):
+            from ..models import ModelConfig
+            return mock_engine, "mock-model", ModelConfig(), {}
+    else:
+        def _engine_type(role):
+            return (settings.agent_configs.get(role) or get_default_engine_config(role, settings)).engine
+        used_engines = {_engine_type(r) for r in AGENT_CONFIGS}
+        claude_engine = ClaudeEngine(settings)
+        copilot_engine = CopilotEngine(settings) if "copilot" in used_engines else None
+        codex_engine = CodexEngine(settings) if "codex" in used_engines else None
+        openai_engine = OpenAIEngine(settings) if "openai" in used_engines else None
+
+        await claude_engine.start()
+        engines_to_stop.append(claude_engine)
+        if copilot_engine:
+            await copilot_engine.start()
+            engines_to_stop.append(copilot_engine)
+        if codex_engine:
+            await codex_engine.start()
+            engines_to_stop.append(codex_engine)
+        if openai_engine:
+            await openai_engine.start()
+            engines_to_stop.append(openai_engine)
+
+        def _resolve(role):
+            cfg = settings.agent_configs.get(role) or get_default_engine_config(role, settings)
+            if cfg.engine == "copilot" and copilot_engine: eng = copilot_engine
+            elif cfg.engine == "codex" and codex_engine: eng = codex_engine
+            elif cfg.engine == "openai" and openai_engine: eng = openai_engine
+            else: eng = claude_engine
+            model = cfg.model_config.model or (
+                _COPILOT_DEFAULTS.get(role, "") if cfg.engine == "copilot"
+                else getattr(settings, _CLAUDE_TIER.get(role, "sonnet_model"))
+            )
+            return eng, model, cfg.model_config, cfg.mcp_servers
+
+    async def call(role, prompt):
+        action = prompt[:120].strip().replace("\n", " ")
+        t0 = time.monotonic()
+        await on_event({"type": "agent_started", "role": role, "action": action})
+        system_prompt, tools, _ = AGENT_CONFIGS[role]
+        eng, model, model_config, mcp_servers = _resolve(role)
+        log_lines = []
+        async def _forwarding_on_event(evt):
+            etype = evt.get("type", "")
+            if etype == "agent_message":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] MESSAGE: {evt.get('text', '')}")
+            elif etype == "agent_tool_call":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL CALL: {evt.get('tool_name')}({evt.get('args_preview', '')})")
+            elif etype == "agent_tool_result":
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                log_lines.append(f"[{ts}] TOOL RESULT ({evt.get('tool_name')}): {evt.get('result_preview', '')}")
+            await on_event(evt)
+        try:
+            result = await eng.run(
+                role=role, prompt=prompt, system_prompt=system_prompt,
+                tools=tools, model=model, model_config=model_config,
+                mcp_servers=mcp_servers, on_event=_forwarding_on_event,
+                run_id=run_id,
+            )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            summary = result.strip() if result else ""
+            await on_event({"type": "agent_completed", "role": role, "success": True, "elapsed_ms": elapsed_ms, "summary": summary})
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, result, elapsed_ms)
+            return result
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            err_msg = str(e)[:300]
+            await on_event({"type": "agent_completed", "role": role, "success": False, "elapsed_ms": elapsed_ms, "summary": err_msg})
+            if log_dir:
+                _write_agent_log(log_dir, role, prompt, log_lines, f"ERROR: {e}", elapsed_ms)
+            raise RuntimeError(f"Agent '{role}' failed: {e}") from e
+
+    async def stage(label, cycle=None):
+        await on_event({"type": "stage_changed", "stage": label, "cycle": cycle})
+
+    try:
+        completed_stage = (checkpoint or {}).get("completed_stage", 0)
+        plan = (checkpoint or {}).get("plan", task)
+        last_diff = (checkpoint or {}).get("last_diff", "")
+        pr_result = (checkpoint or {}).get("pr_result", pr_url)
+        addressed_ids = list((checkpoint or {}).get("addressed_ids", []))
+
+        if not pr_url and completed_stage < 1:
+            # Stage 1: Design
+            await stage("Stage 1: Design", cycle=0)
+            plan = await call("lead-developer", task)
+            qa_result = ""
+            qa_approved = False
+            lead_dev_response = ""
+            for i in range(settings.max_design_cycles):
+                await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
+                qa_prompt = f"REVIEW DESIGN:\n\n{plan}"
+                if lead_dev_response:
+                    qa_prompt += f"\n\n---\n\nLead developer's per-finding response from last revision:\n{lead_dev_response}"
+                qa_result = await call("qa-engineer", qa_prompt)
+                if "APPROVED" in qa_result.upper():
+                    qa_approved = True
+                    break
+                if i < settings.max_design_cycles - 1:
+                    lead_dev_response = await call("lead-developer", f"Task:\n{task}\n\nCurrent Plan:\n{plan}\n\nQA Findings:\n{qa_result}")
+                    plan = lead_dev_response
+
+            qa_section = ""
+            if qa_result:
+                status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns (max cycles reached)"
+                qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+            spec_for_review = plan + qa_section
+
+            # Optional human approval gate
+            if on_approval_required is not None and not settings.headless:
+                dev_response = ""
+                while True:
+                    gate_result = await on_approval_required(spec_for_review, dev_response)
+                    if gate_result.get("approved"):
+                        break
+                    feedback = gate_result.get("feedback", "")
+                    comments = gate_result.get("comments", [])
+                    if feedback or comments:
+                        comment_text = ""
+                        if comments:
+                            comment_lines = "\n".join(f"- [{c.get('selectedText', '')}]: {c.get('commentText', '')}" for c in comments)
+                            comment_text = f"\n\nInline comments:\n{comment_lines}"
+                        plan = await call("lead-developer",
+                            f"REFINE the following plan based on human feedback.\n\nPlan:\n{plan}\n\nFeedback:\n{feedback}{comment_text}")
+                        qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
+                        qa_approved = "APPROVED" in qa_result.upper()
+                        qa_section = ""
+                        if qa_result:
+                            status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns"
+                            qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+                        spec_for_review = plan + qa_section
+                        dev_response = plan[:300].strip()
+
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 1, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        if not pr_url and completed_stage < 3:
+            # Stage 2: Implementation
+            await stage("Stage 2: Implementation", cycle=0)
+            findings = ""
+            already_approved = set()
+            for impl_cycle in range(settings.max_impl_cycles):
+                await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}", cycle=impl_cycle + 1)
+                impl_prompt = plan if not findings else f"{plan}\n\nReview findings to address:\n{findings}"
+                dev_response = await call("developer", impl_prompt)
+
+                build_ok = False
+                build_output = ""
+                for build_cycle in range(settings.max_build_cycles):
+                    build_output = await call("build-agent", "Build and test the project.")
+                    if "SUCCESS" in build_output.upper():
+                        build_ok = True
+                        break
+                    if build_cycle < settings.max_build_cycles - 1:
+                        dev_response = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                if not build_ok:
+                    findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
+                    break
+
+                diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+                dev_response_ctx = f"\n\nDeveloper's per-finding response:\n{dev_response}" if dev_response and findings else ""
+                pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
+
+                reviewer_results = {}
+                if pending:
+                    results = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in pending])
+                    for role, result in zip(pending, results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" not in result.upper():
+                            already_approved.add(role)
+
+                combined = "\n".join(reviewer_results.values())
+                has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
+                if has_critical and already_approved:
+                    reinvite = list(already_approved)
+                    re_results = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in reinvite])
+                    for role, result in zip(reinvite, re_results):
+                        reviewer_results[role] = result
+                        if "NEEDS IMPROVEMENT" in result.upper():
+                            already_approved.discard(role)
+                elif already_approved:
+                    await on_event({"type": "agent_message", "role": "orchestrator",
+                        "text": f"Skipping approved reviewer(s): {', '.join(sorted(already_approved))}"})
+
+                findings = "\n\n---\n\n".join(r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper())
+                if save_checkpoint:
+                    await save_checkpoint({"completed_stage": 1, "plan": plan, "last_diff": last_diff,
+                        "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": list(already_approved)})
+                if not findings:
+                    break
+
+            # Stage 3: Commit & PR
+            await stage("Stage 3: Commit & PR", cycle=0)
+            pr_result = await call("repo-manager",
+                f"Commit all changes and create a Pull Request.\n"
+                f"Branch: feature/{re.sub(r'[^a-z0-9]+', '-', task[:50].lower()).strip('-')}\n"
+                f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.")
+            last_diff = pr_result
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 3, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        elif not pr_url and completed_stage >= 3:
+            await on_event({"type": "agent_message", "role": "orchestrator",
+                "text": f"Resuming from Stage 3b (Stage 1-3 already completed). PR: {pr_result[:100]}"})
+
+        # Stage 3b: CI Check Polling
+        for ci_cycle in range(settings.max_pr_cycles):
+            await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}", cycle=ci_cycle + 1)
+            check_result = await call("repo-manager", "POLL CI CHECKS")
+            if "CHECKS PASSING" in check_result.upper():
+                break
+            await call("developer", f"Fix the following CI check failures:\n{check_result}")
+            build_output = await call("build-agent", "Build and test the project.")
+            if "FAILURE" in build_output.upper():
+                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                await call("build-agent", "Build and test the project.")
+            last_diff = await call("repo-manager", "PUSH CHANGES")
+
+        # Stage 4: PR Poll Loop
+        await stage("Stage 4: PR Poll", cycle=0)
+        for pr_cycle in range(settings.max_pr_cycles):
+            await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}", cycle=pr_cycle + 1)
+            exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
+            poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
+            if "NO ACTIONABLE COMMENTS" in poll_result.upper():
+                break
+            new_ids = _extract_comment_ids(poll_result)
+            if new_ids:
+                addressed_ids.extend(new_ids)
+                await call("repo-manager", f"MARK COMMENTS ADDRESSED: {', '.join(new_ids)}")
+            await call("developer", f"Address the following PR review comments:\n{poll_result}")
+            build_output = await call("build-agent", "Build and test the project.")
+            if "FAILURE" in build_output.upper():
+                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                await call("build-agent", "Build and test the project.")
+            diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+            reviews = await asyncio.gather(*[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in _ALL_REVIEWERS])
+            review_findings = "\n\n---\n\n".join(r for r in reviews if "NEEDS IMPROVEMENT" in r.upper())
+            if review_findings:
+                await call("developer", f"Address review findings before pushing:\n{review_findings}")
+                build_output = await call("build-agent", "Build and test the project.")
+                if "FAILURE" in build_output.upper():
+                    await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                    await call("build-agent", "Build and test the project.")
+            last_diff = await call("repo-manager", "PUSH CHANGES")
+            if save_checkpoint:
+                await save_checkpoint({"completed_stage": 3, "plan": plan, "last_diff": last_diff,
+                    "pr_result": pr_result, "addressed_ids": addressed_ids, "already_approved": []})
+
+        return f"Pipeline complete. PR: {pr_result[:200]}"
+    finally:
+        for eng in engines_to_stop:
+            await eng.stop()
+```
+
+**Key observation**: `run_id` is already threaded through (line 49 parameter, line 137 passed to `eng.run()`). However, the `finally` block (line 415) only calls `eng.stop()` — it does **not** call `copilot_engine.close_run(run_id)` as the plan proposes.
+
+---
+
+## 4. `app/web/run_manager.py` — RunManager (265 lines)
+
+```python
+"""RunManager — queues, executes, and tracks pipeline runs (parallel + resumable)."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from dataclasses import asdict, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from ..models import AppSettings, RunRecord, RunStatus, _agent_engine_config_from_dict
+from ..pipeline.helpers import ApprovalGate, _parse_stage_announcement
+from ..pipeline.runner import run_pipeline
+from .broadcaster import SseBroadcaster
+from .database import OLamoDb
+
+logger = logging.getLogger(__name__)
+_DEFAULT_MAX_CONCURRENT = 5
+_run_id_lock = asyncio.Lock()
+
+
+class RunManager:
+    def __init__(self, broadcaster, store, db_path="olamo.db", max_concurrent=5):
+        self._broadcaster = broadcaster
+        self._store = store
+        self._db = OLamoDb(db_path)
+        self._runs = {}
+        self._active_tasks = {}
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self.pending_approvals = {}
+
+    async def setup(self):
+        await self._db.open()
+        for run in await self._db.get_all_runs():
+            self._runs[run.id] = run
+            if run.status == RunStatus.RUNNING:
+                run.status = RunStatus.INTERRUPTED
+                await self._db.upsert_run(run)
+                await self._db.upsert_run_state(run.id, current_stage="interrupted")
+            elif run.status == RunStatus.QUEUED:
+                self._spawn(run)
+
+    async def resume(self, run_id):
+        run = self._runs.get(run_id)
+        if run is None or run.status != RunStatus.INTERRUPTED:
+            return None
+        run.status = RunStatus.QUEUED
+        run.started_at = None
+        run.error = None
+        await self._db.upsert_run(run)
+        self._spawn(run)
+        return run
+
+    async def close(self):
+        for task in list(self._active_tasks.values()):
+            task.cancel()
+        if self._active_tasks:
+            await asyncio.gather(*self._active_tasks.values(), return_exceptions=True)
+        await self._db.close()
+
+    async def enqueue(self, description, pr_url="", settings_override=None):
+        run_id = await self._next_run_id(self._db._conn)
+        run = RunRecord(
+            id=str(uuid.uuid4()), description=description,
+            run_id=run_id, pr_url=pr_url,
+            settings_override=settings_override or {},
+        )
+        self._runs[run.id] = run
+        await self._db.upsert_run(run)
+        await self._db.insert_event(run.id, {"type": "run_queued", "run_id": run.id, "description": description})
+        await self._broadcaster.broadcast({"type": "run_queued", "run_id": run.id, "description": description})
+        self._spawn(run)
+        return run
+
+    def _spawn(self, run):
+        task = asyncio.create_task(self._run_with_semaphore(run), name=f"run-{run.id}")
+        self._active_tasks[run.id] = task
+        task.add_done_callback(lambda _: self._active_tasks.pop(run.id, None))
+
+    async def _run_with_semaphore(self, run):
+        async with self._semaphore:
+            await self._execute_run(run)
+
+    async def get_run_events(self, run_id): return await self._db.get_events(run_id)
+    async def get_run_state(self, run_id): return await self._db.get_run_state(run_id)
+    async def get_event_content_path(self, run_id, seq): return await self._db.get_event_content_path(run_id, seq)
+
+    @property
+    def all_runs(self): return sorted(self._runs.values(), key=lambda r: r.queued_at, reverse=True)
+    def get_run(self, run_id): return self._runs.get(run_id)
+    def start(self): pass
+
+    @staticmethod
+    async def _next_run_id(conn):
+        date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
+        async with _run_id_lock:
+            cursor = await conn.execute(
+                "SELECT MAX(CAST(SUBSTR(run_id, 10) AS INTEGER)) FROM runs WHERE run_id LIKE ?",
+                (f"{date_part}%",),
+            )
+            row = await cursor.fetchone()
+            current_max = row[0] if row and row[0] is not None else 0
+            return f"{date_part}_{current_max + 1}"
+
+    async def _execute_run(self, run):
+        run.status = RunStatus.RUNNING
+        run.started_at = datetime.now(timezone.utc).isoformat()
+        log_dir = Path("logs") / (run.run_id or run.id)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        run.log_dir = str(log_dir)
+        await self._db.upsert_run(run)
+        await self._db.upsert_run_state(run.id, current_stage="running")
+        await self._store.lock()
+
+        started_evt = {"type": "run_started", "run_id": run.id}
+        await self._broadcaster.broadcast(started_evt)
+        await self._db.insert_event(run.id, started_evt)
+
+        # Settings override
+        base = self._store.settings
+        if run.settings_override:
+            fields = set(AppSettings.__dataclass_fields__) - {"agent_configs"}
+            filtered = {k: v for k, v in run.settings_override.items() if k in fields}
+            base_dict = {k: v for k, v in asdict(base).items() if k != "agent_configs"}
+            settings = AppSettings(**{**base_dict, **filtered}, agent_configs=base.agent_configs)
+            run_agent_overrides = run.settings_override.get("agent_configs", {})
+            if run_agent_overrides:
+                merged_agents = dict(settings.agent_configs)
+                for role, cfg_dict in run_agent_overrides.items():
+                    merged_agents[role] = _agent_engine_config_from_dict(cfg_dict)
+                settings = replace(settings, agent_configs=merged_agents)
+        else:
+            settings = base
+
+        checkpoint = await self._db.load_checkpoint(run.id)
+        gate = ApprovalGate()
+        self.pending_approvals[run.id] = gate
+
+        async def on_event(evt):
+            await self._broadcaster.broadcast(evt)
+            seq = await self._db.insert_event(run.id, evt)
+            evt_type = evt.get("type")
+            if evt_type == "stage_changed":
+                stage = evt["stage"]
+                cycle_info = _parse_stage_announcement(stage)
+                await self._db.upsert_run_state(run.id, current_stage=stage, current_cycle=cycle_info)
+            elif evt_type == "agent_started":
+                await self._db.upsert_run_state(run.id, last_agent=evt.get("role"))
+            elif evt_type == "agent_completed":
+                await self._db.upsert_run_state(run.id, last_agent=evt.get("role"),
+                    last_agent_ok=evt.get("success"), last_summary=evt.get("summary"))
+            evt["seq"] = seq
+
+        async def on_approval_required(spec, developer_response=""):
+            content_dir = log_dir / "content"
+            content_dir.mkdir(parents=True, exist_ok=True)
+            spec_summary = spec[:300].rstrip()
+            evt = {"type": "awaiting_approval", "run_id": run.id,
+                "specSummary": spec_summary, "developerResponse": developer_response[:300] if developer_response else ""}
+            seq = await self._db.insert_event(run.id, evt)
+            spec_path = content_dir / f"spec-{seq}.md"
+            spec_path.write_text(spec, encoding="utf-8")
+            await self._db.update_event_content_path(run_id=run.id, seq=seq, content_path=str(spec_path))
+            evt["seq"] = seq
+            await self._broadcaster.broadcast(evt)
+            result = await gate.wait(spec)
+            if result.get("approved"):
+                approval_evt = {"type": "design_approval_received", "run_id": run.id}
+                await self._db.insert_event(run.id, approval_evt)
+                await self._broadcaster.broadcast(approval_evt)
+            return result
+
+        async def save_ckpt(data):
+            await self._db.save_checkpoint(run.id, data)
+
+        try:
+            result = await run_pipeline(
+                run.description, settings, on_event,
+                pr_url=run.pr_url, on_approval_required=on_approval_required,
+                checkpoint=checkpoint, save_checkpoint=save_ckpt,
+                log_dir=str(log_dir), run_id=run.run_id or None,
+            )
+            run.status = RunStatus.COMPLETED
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            await self._db.upsert_run(run)
+            await self._db.upsert_run_state(run.id, current_stage="completed")
+            completed_evt = {"type": "run_completed", "run_id": run.id, "status": "completed", "result": result[:500]}
+            await self._broadcaster.broadcast(completed_evt)
+            await self._db.insert_event(run.id, completed_evt)
+        except Exception as e:
+            run.status = RunStatus.FAILED
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            run.error = str(e)
+            await self._db.upsert_run(run)
+            await self._db.upsert_run_state(run.id, current_stage="failed")
+            failed_evt = {"type": "run_completed", "run_id": run.id, "status": "failed", "error": str(e)}
+            await self._broadcaster.broadcast(failed_evt)
+            await self._db.insert_event(run.id, failed_evt)
+        finally:
+            self.pending_approvals.pop(run.id, None)
+            await self._store.unlock()
+```
+
+---
+
+## 5. `app/engines/base.py` — AgentEngine Protocol (25 lines)
+
+```python
+"""AgentEngine Protocol — the common interface all engine implementations must satisfy."""
+
+from __future__ import annotations
+
+from typing import Awaitable, Callable, Protocol
+
+from ..models import AppSettings, ModelConfig
+
+
+class AgentEngine(Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+    async def run(
+        self,
+        role: str,
+        prompt: str,
+        system_prompt: str,
+        tools: list[str],
+        model: str,
+        model_config: ModelConfig,
+        mcp_servers: dict[str, dict],
+        on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
+    ) -> str: ...
+```
+
+The protocol already has `run_id: str | None = None` — Phase 1 Step 2 is **done**.
+
+---
+
+## 6. `agents/prompts/lead-developer/plan.md` — The Integration Plan (474 lines)
+
+This is the **Copilot SDK Session Resume Integration** plan (revised). It's located at `agents/prompts/lead-developer/plan.md`. The full content was shown above — it covers:
+
+- **Problem**: New session per call, no context reuse, no cross-restart resume
+- **Two sub-features**: (A) In-process session reuse (cache by `run_id+role`), (B) Cross-restart resume via DB + `resume_session()`
+- **Data model**: `agent_sessions` table (already implemented in `app/db/sessions.py`)
+- **Protocol changes**: `run_id` kwarg on `AgentEngine.run()` (already done)
+- **CopilotEngine rewrite**: Session cache, `close_run()`, fallback logic
+- **4-phase implementation plan**: Foundation → In-process reuse → Cross-restart resume → Testing
+- **Edge cases**: Expired sessions, concurrent runs, process kills, DB unavailability
+
+---
+
+## Summary: What's Done vs. What Remains
+
+| Plan Phase | Step | Status |
+|---|---|---|
+| **Phase 1** | `run_id` on `RunRecord` | ✅ Done |
+| **Phase 1** | `run_id` on `AgentEngine` protocol | ✅ Done |
+| **Phase 1** | Thread `run_id` through pipeline | ✅ Done |
+| **Phase 1** | `agent_sessions` table + CRUD | ✅ Done (`app/db/sessions.py`) |
+| **Phase 1** | Run ID generation (`YYYYMMDD_N`) | ✅ Done (in `RunManager`) |
+| **Phase 2** | `CopilotEngine` session cache (`self._sessions`) | ❌ **Not done** — still creates new session per call |
+| **Phase 2** | `close_run(run_id)` method | ❌ **Not done** |
+| **Phase 2** | Wire `close_run()` into orchestrated `finally` | ❌ **Not done** — `finally` only calls `eng.stop()` |
+| **Phase 3** | Persist session info to DB on creation | ❌ **Not done** |
+| **Phase 3** | Resume lookup + `resume_session()` | ❌ **Not done** |
+| **Phase 3** | Lifecycle (mark closed/expired, prune) | ❌ **Not done** (DB helpers exist but aren't wired) |
+
+The **foundation is fully laid** — all plumbing is in place. The remaining work is concentrated entirely in `CopilotEngine.run()` (the rewrite to cache/resume sessions) and the `finally` block in `orchestrated.py`.
+Let me read the actual source files directly instead of the intermediate output:
+Now let me read the plan.md file and the existing tests:
+Now I have a thorough understanding of the entire codebase and the proposed plan. Let me verify one more thing about how `close_run` should be wired:
+Let me now read the actual plan file that was created:
+Now I have a complete picture of the current codebase and the proposed plan. Let me conduct the design review.
+
+---
+
+## Design Review: Agent SDK Session Resume Integration
+
+### Context
+
+I'm reviewing the plan at `agents/prompts/lead-developer/plan.md` for adding session reuse and cross-restart resume to `CopilotEngine`. Phase 1 (foundation: `run_id`, `AgentEngine` protocol, `agent_sessions` table, threading) is already implemented and verified in the codebase. I'm reviewing the remaining Phases 2–4.
+
+---
+
+### Finding 1: 🔴 Critical — No DB Access Path for `CopilotEngine`
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` and `_should_resume()` pseudocode
+
+**Problem:** The plan shows `CopilotEngine.run()` calling `lookup_session_id()`, `upsert_agent_session()`, `mark_session_expired()`, and `_prune_old_sessions()` — but **never specifies how the engine obtains a DB connection**.
+
+Currently `CopilotEngine.__init__` only receives `AppSettings`. The `aiosqlite.Connection` is owned by `OLamoDb`, which is owned by `RunManager`. The `run()` method signature on the protocol is already frozen and does not include a DB parameter. The pseudocode references `db_query()` as if it's a global — it isn't.
+
+**Fix:** The plan must specify one of:
+- **(a)** Pass `conn` (or a thin wrapper interface) to `CopilotEngine.__init__` or `start()`
+- **(b)** Give `CopilotEngine` its own `aiosqlite.connect()` to `olamo.db` (works due to WAL mode concurrent readers)
+- **(c)** Thread a `session_store` abstraction through the engine's constructor
+
+Option (b) is simplest and consistent with WAL mode, but the plan must explicitly state this and handle connection lifecycle (open in `start()`, close in `stop()`).
+
+---
+
+### Finding 2: 🔴 Critical — `close_run()` Cannot Be Called on Protocol-Typed Variable
+
+**File/Section:** Plan § "Implementation Steps" step 10, `orchestrated.py` line 73
+
+**Problem:** In `orchestrated.py`, `copilot_engine` is typed as `AgentEngine | None`:
+```python
+copilot_engine: AgentEngine | None = CopilotEngine(settings) if "copilot" in used_engines else None
+```
+`close_run(run_id)` is not on the `AgentEngine` protocol. Calling `copilot_engine.close_run(run_id)` is a **type error**. The plan says "call `copilot_engine.close_run(run_id)` if copilot_engine exists and run_id is set" but doesn't address this conformance gap.
+
+**Fix:** The plan must specify one of:
+- **(a)** Add `async def close_run(self, run_id: str) -> None: ...` to `AgentEngine` protocol (no-op in all other 4 engines) — cleanest
+- **(b)** Narrow the type: `copilot_engine: CopilotEngine | None = ...`
+- **(c)** Use `isinstance(copilot_engine, CopilotEngine)` guard in the finally block
+
+Recommend **(a)** — it's explicit, type-safe, and the no-op cost in other engines is one empty method each.
+
+---
+
+### Finding 3: 🟡 Significant — Pseudocode Uses Wrong SDK API
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` pseudocode (line 199)
+
+**Problem:** The pseudocode shows:
+```python
+event = await session.send_and_wait(prompt, timeout=600.0)
+result = extract_content(event)
+```
+
+But the **actual** `CopilotEngine.run()` uses an event-driven pattern:
+```python
+unsubscribe = session.on(_handler)
+await session.send(prompt)
+await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+```
+
+These are fundamentally different APIs. `send_and_wait` doesn't exist in the real engine (only in the mock test helpers). The plan's pseudocode misrepresents what needs to change, making it ambiguous whether the rewrite should switch APIs or keep the event-driven approach with session reuse.
+
+**Fix:** Rewrite the pseudocode to match the actual event-driven pattern, showing:
+- Where `session.on(_handler)` is registered (once per creation? per call?)
+- Where `unsubscribe()` happens (per call, but without `disconnect()`)
+- How `idle_event` resets between reused calls
+
+---
+
+### Finding 4: 🟡 Significant — Event Handler Lifecycle Not Specified for Reused Sessions
+
+**File/Section:** Plan § "CopilotEngine Rewrite" — `run()` method
+
+**Problem:** The current code registers a new `_handler` closure per `run()` call via `session.on(_handler)`. Each handler captures its own `on_event` callback, `message_parts`, `idle_event`, and `error_exc`. With session reuse:
+- Must the handler be registered once (at creation) or per-call?
+- If per-call: `unsubscribe()` must still happen in `finally`, but `disconnect()` must not
+- If once: the handler's captured `on_event` from the first call would be stale on subsequent calls (the `_forwarding_on_event` wrapper in `orchestrated.py` captures fresh `log_lines` each time)
+
+The plan doesn't address this. Getting it wrong means either leaked handlers or stale callbacks.
+
+**Fix:** Specify that the event handler is registered **per-call** (not per-session), matching the current pattern. Update the `finally` block to:
+```python
+finally:
+    unsubscribe()                    # always clean up handler
+    if run_id is None:              # legacy path
+        await session.disconnect()
+```
+
+---
+
+### Finding 5: 🟡 Significant — `settings_snapshot` Serialization Underspecified
+
+**File/Section:** Plan § "Data Model" — `settings_snapshot` column
+
+**Problem:** The plan says `settings_snapshot` stores "only the per-agent `ModelConfig` as JSON". But `ModelConfig` is a dataclass with `extra_params: dict`. The plan doesn't specify:
+- What serialization format? (`dataclasses.asdict()`? Manual?)
+- What happens on deserialization if `ModelConfig` schema changes between server restarts?
+- Is the snapshot compared on resume to detect incompatible settings?
+
+Without this, the resume path may fail silently or with opaque errors.
+
+**Fix:** Specify that `dataclasses.asdict(model_config)` is used for serialization, and on resume, the snapshot is logged but **not** validated against current settings (the SDK handles its own compatibility check). If resume fails, fallback handles it.
+
+---
+
+### Finding 6: 🟢 Minor — `_prune_old_sessions()` at Startup Has DB Dependency
+
+**File/Section:** Plan § "Data Model" — cleanup policy
+
+**Problem:** The plan says "Called once at startup in `CopilotEngine.start()`" but Finding 1 shows the engine has no DB access at startup. This is dependent on resolving Finding 1.
+
+**Fix:** Once DB access is resolved (Finding 1), specify prune timing. If using option (b) from Finding 1 (dedicated connection), `start()` is fine. Otherwise, move pruning to `RunManager.setup()`.
+
+---
+
+### Summary Verdict
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | 🔴 Critical | No DB access path for CopilotEngine |
+| 2 | 🔴 Critical | `close_run()` not callable on protocol-typed variable |
+| 3 | 🟡 Significant | Pseudocode uses `send_and_wait` instead of actual event-driven API |
+| 4 | 🟡 Significant | Event handler lifecycle not specified for reused sessions |
+| 5 | 🟡 Significant | `settings_snapshot` serialization/deserialization underspecified |
+| 6 | 🟢 Minor | Prune timing depends on DB access resolution |
+
+---
+
+**NEEDS IMPROVEMENT: Findings 1 and 2 are blocking — they represent real architectural gaps that will cause implementation to stall or produce incorrect code. Findings 3–5 are significant but could be resolved during implementation if the engineer is careful; however, they should be addressed in the plan for clarity.**
+
+────────────────────────────────────────────────────────────
+[2026-04-07T19:10:16Z] PROMPT (98268ms):
+REVIEW CODE:
+Original plan:
+I'll conduct a thorough exploration of this codebase. Let me start with broad structure discovery and then drill into each area in parallel.
+Now let me read all the core files in parallel to cover every area:
+Now let me read all remaining critical files in parallel:
+Let me grab the remaining files I haven't covered yet:
+Let me check the agents directory structure:
+Here is the complete, thorough analysis of the OLamo codebase across all 6 areas:
+
+---
+
+## 1. Agent Creation & Management
+
+### SDK: **`claude-agent-sdk`** (primary) + **`github-copilot-sdk`** + **`codex-app-server-sdk`** + **`openai`**
+
+**Core agent definition file:** `/Users/anil/Source/OLamo/app/agents.py`
+
+Agents are defined using `AgentDefinition` from `claude_agent_sdk`. The function `build_agents(s: AppSettings) -> dict[str, AgentDefinition]` creates **6 agent types**, each with a description, prompt (loaded from markdown), tools list, and model:
+
+| Role | Model Tier | Tools |
+|------|-----------|-------|
+| **lead-developer** | opus | Read, Glob, Grep, WebSearch, WebFetch |
+| **developer** | sonnet | Read, Write, Edit, Bash, Glob, Grep |
+| **code-reviewer** | opus | Read, Glob, Grep |
+| **qa-engineer** | opus | Read, Bash, Glob, Grep |
+| **build-agent** | haiku | Bash, Read, Glob |
+| **repo-manager** | haiku | Bash, Read |
+
+**Key data flow:**
+- `AGENT_CONFIGS` dict (line 103-106): Maps `role → (system_prompt, tools, settings_attribute)` — single source of truth for orchestrated mode
+- Character prompts loaded from `/Users/anil/Source/OLamo/agents/{role}.md` via `load_character()` in `/Users/anil/Source/OLamo/app/prompts.py`
+- Task-specific prompts from `/Users/anil/Source/OLamo/agents/prompts/{role}/{task}.md` via `load_prompt()`
+
+**Two orchestration modes** (controlled by `settings.orchestration_mode`):
+
+1. **"pm" mode** (`/Users/anil/Source/OLamo/app/pipeline/pm.py`): Uses Claude SDK's **Task tool** — a PM LLM orchestrator spawns sub-agents via `query()` with `agents=build_agents(settings)` and `allowed_tools=["Task"]`. The PM decides which agent to call and when.
+
+2. **"orchestrated" mode** (`/Users/anil/Source/OLamo/app/pipeline/orchestrated.py`): Python-driven deterministic loops. No PM LLM. Each stage/cycle is hardcoded in Python. Supports **mixed engines** (Claude + Copilot + Codex + OpenAI).
+
+---
+
+## 2. Session/Pipeline Resume Mechanism
+
+This is a **multi-layered resume system**:
+
+### Layer 1: Pipeline Checkpointing (in-memory → DB)
+**File:** `/Users/anil/Source/OLamo/app/pipeline/orchestrated.py` (lines 158-163, 231-239, 311-319, 334-342, 403-411)
+
+The `save_checkpoint` callback is invoked at key completion points:
+```python
+# Checkpoint schema:
+{
+    "completed_stage": int,    # 0=start, 1=design done, 3=commit&PR done
+    "plan": str,               # The design plan
+    "last_diff": str,          # Git diff / PR result
+    "pr_result": str,          # PR URL or result
+    "addressed_ids": list,     # PR comment IDs already addressed
+    "already_approved": list,  # Reviewers that approved
+}
+```
+
+On resume, `completed_stage` determines where to jump:
+- `< 1` → Start at Stage 1 (Design)
+- `< 3` → Start at Stage 2 (Implementation)
+- `>= 3` → Skip to Stage 3b (CI polling)
+
+### Layer 2: Database Persistence
+**File:** `/Users/anil/Source/OLamo/app/web/database.py` (lines 288-311)
+
+- `save_checkpoint(run_id, data)` → JSON-encodes and stores in `run_state.checkpoint_data`
+- `load_checkpoint(run_id)` → Retrieves checkpoint dict from DB
+
+### Layer 3: Run Status Recovery (Server Restart)
+**File:** `/Users/anil/Source/OLamo/app/web/run_manager.py` (lines 48-65, 66-76)
+
+On `setup()`:
+- All runs with status `RUNNING` → marked `INTERRUPTED`
+- Runs with status `QUEUED` → auto-re-spawned
+
+`resume(run_id)` method:
+- Changes `INTERRUPTED` → `QUEUED`
+- Clears `started_at`/`error`
+- Calls `_spawn(run)` to re-execute
+
+### Layer 4: Agent Session Resume (Copilot SDK)
+**File:** `/Users/anil/Source/OLamo/app/db/sessions.py`
+
+The `agent_sessions` table maps `(run_id, role) → session_id` with a frozen `settings_snapshot`. This enables cross-restart Copilot SDK session resume via `resume_session()`.
+
+**Session lifecycle functions:**
+- `upsert_session()` — create/update session row
+- `lookup_session()` — find active session for (run_id, role)
+- `mark_closed()` / `mark_expired()` — terminal states
+- `mark_all_closed_for_run()` — cleanup on run end
+- `prune_old_sessions()` — delete sessions older than 7 days
+
+### Layer 5: Approval Gate Resume
+**File:** `/Users/anil/Source/OLamo/app/pipeline/approval_gate.py`
+
+`ApprovalGate` uses an `asyncio.Future` to suspend pipeline execution until human approval arrives via the REST API (`POST /api/runs/{id}/approval`). Survives across requests because the gate is stored in `RunManager.pending_approvals[run_id]`.
+
+---
+
+## 3. Run Settings
+
+### Settings Hierarchy
+
+```
+config/defaults.json          ← Hardcoded defaults (constants)
+olamo-settings.json           ← User overrides (JSONC supported)
+Per-run settings_override     ← Per-run API override (merged on top)
+```
+
+### Key Classes & Files
+
+**`AppSettings`** (`/Users/anil/Source/OLamo/app/models/app_settings.py`):
+```python
+@dataclass
+class AppSettings:
+    pm_model, opus_model, sonnet_model, haiku_model: str
+    max_design_cycles, max_build_cycles, max_impl_cycles, max_pr_cycles: int
+    api_base_url: str
+    orchestration_mode: str           # "pm" or "orchestrated"
+    agent_configs: dict[str, AgentEngineConfig]
+    copilot_github_token: str
+    headless: bool
+```
+
+**`AgentEngineConfig`** (`/Users/anil/Source/OLamo/app/models/agent_engine_config.py`):
+```python
+@dataclass
+class AgentEngineConfig:
+    engine: str                       # "claude", "copilot", "codex", "openai"
+    model_config: ModelConfig
+    mcp_servers: dict
+```
+
+**`ModelConfig`** (`/Users/anil/Source/OLamo/app/models/model_config.py`):
+```python
+@dataclass
+class ModelConfig:
+    mode: str              # "simple" or "advanced"
+    model: str
+    provider_type: str     # "openai", "azure", "anthropic", "bedrock"
+    base_url: str
+    api_key: str
+    extra_params: dict
+```
+
+**`SettingsStore`** (`/Users/anil/Source/OLamo/app/settings.py`):
+- Loads from `olamo-settings.json` (JSONC with comment stripping)
+- Has **lock/unlock semantics**: while a run is active, settings are locked; updates are queued as `_pending` and applied on `unlock()`
+- `try_update()` returns `False` if locked (update deferred)
+
+**Settings binding in RunManager** (`/Users/anil/Source/OLamo/app/web/run_manager.py`, lines 163-177):
+1. Base = global `store.settings`
+2. If `run.settings_override` exists: merge scalar fields, deep-merge `agent_configs`
+3. Result passed to `run_pipeline()`
+
+**Defaults source:** `/Users/anil/Source/OLamo/config/defaults.json` — loaded into module-level constants in `/Users/anil/Source/OLamo/app/constants.py`.
+
+**REST API for settings:** `GET/PUT /api/settings` in `/Users/anil/Source/OLamo/app/web/app.py` (lines 219-236)
+
+---
+
+## 4. Database Schema (`olamo.db`)
+
+**Engine:** SQLite via **`aiosqlite`** (async), **WAL mode** enabled
+
+**4 tables** defined across 2 files:
+
+### Table: `runs` (`/Users/anil/Source/OLamo/app/web/database.py`, lines 52-63)
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | UUID |
+| `description` | TEXT | Task description |
+| `status` | TEXT | queued/running/interrupted/completed/failed |
+| `run_id` | TEXT | Human-readable YYYYMMDD_N |
+| `queued_at` | TEXT | ISO timestamp |
+| `started_at` | TEXT | ISO timestamp |
+| `completed_at` | TEXT | ISO timestamp |
+| `error` | TEXT | Error message if failed |
+| `log_dir` | TEXT | Path to log directory |
+| `pr_url` | TEXT | Pull request URL |
+| `settings_override` | TEXT | JSON per-run settings override |
+
+### Table: `events` (lines 65-82)
+| Column | Type | Description |
+|--------|------|-------------|
+| `seq` | INTEGER PK AUTOINCREMENT | Monotonically increasing sequence |
+| `run_id` | TEXT FK → runs(id) | |
+| `ts` | TEXT | ISO timestamp |
+| `data` | TEXT | Full JSON event payload |
+| `type`, `stage`, `cycle`, `role`, `action` | Various | Denormalized columns for querying |
+| `success`, `elapsed_ms` | INTEGER | |
+| `summary`, `content_path`, `pr_url` | TEXT | |
+
+**Index:** `idx_events_run(run_id, seq)`
+
+### Table: `run_state` (lines 84-94)
+| Column | Type | Description |
+|--------|------|-------------|
+| `run_id` | TEXT PK | |
+| `current_stage` | TEXT | Current pipeline stage |
+| `current_cycle` | TEXT | Current cycle info |
+| `last_agent` | TEXT | Last agent role executed |
+| `last_agent_ok` | INTEGER | Whether last agent succeeded |
+| `last_summary` | TEXT | Last agent result summary |
+| `checkpoint_data` | TEXT | JSON checkpoint blob |
+| `updated_at` | TEXT | ISO timestamp |
+
+### Table: `agent_sessions` (`/Users/anil/Source/OLamo/app/db/sessions.py`, lines 20-31)
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK AUTOINCREMENT | |
+| `run_id` | TEXT | |
+| `agent_name` | TEXT | |
+| `role` | TEXT | |
+| `session_id` | TEXT | Copilot SDK session ID |
+| `settings_snapshot` | TEXT | Frozen ModelConfig JSON |
+| `status` | TEXT | active/closed/expired |
+| `created_at` | TEXT | |
+| `closed_at` | TEXT | |
+
+**Unique constraint:** `(run_id, role)` — one session per agent per run.
+
+---
+
+## 5. Main Pipeline Flow
+
+### Entry Point: `/Users/anil/Source/OLamo/main.py`
+
+```
+main()
+├── --server mode → uvicorn.run(create_app())        # Web server (FastAPI)
+└── CLI mode   → run_pipeline_cli(task, ...)
+                 └── run_pipeline(task, settings, on_event, ...)
+                     ├── "pm" mode       → run_pipeline_pm()
+                     └── "orchestrated"  → run_pipeline_orchestrated()
+```
+
+### Orchestrated Mode Full Flow (`run_pipeline_orchestrated`):
+
+```
+┌─────────────────────────────────────────────────────┐
+│  INIT: Resolve engines (Claude/Copilot/Codex/OpenAI) │
+│         Headless? → MockEngine for all roles        │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 1: Design Loop                               │
+│  1. lead-developer creates plan from task           │
+│  2. FOR max_design_cycles:                          │
+│     a. qa-engineer REVIEW DESIGN                    │
+│     b. If APPROVED → break                          │
+│     c. lead-developer REFINE based on QA findings   │
+│  3. [Optional] Human Approval Gate                  │
+│     → Feedback loop: refine → re-QA → re-review     │
+│  4. SAVE CHECKPOINT (stage=1)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 2: Implementation Loop                       │
+│  FOR max_impl_cycles:                               │
+│    1. developer implements from plan                │
+│    2. Build Loop (max_build_cycles):                │
+│       a. build-agent builds/tests                   │
+│       b. If SUCCESS → ok                            │
+│       c. Else developer FIX BUILD FAILURE            │
+│    3. Parallel Review (code-reviewer + qa-engineer  │
+│       + lead-developer) via asyncio.gather          │
+│    4. If CRITICAL findings → re-invite approved     │
+│    5. If no NEEDS_IMPROVEMENT → break               │
+│    6. SAVE CHECKPOINT (stage=1)                     │
+│  7. repo-manager: Commit & Create PR                │
+│  8. SAVE CHECKPOINT (stage=3)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 3b: CI Check Polling (max_pr_cycles)         │
+│  1. repo-manager POLL CI CHECKS                     │
+│  2. If FAILING → developer fixes → rebuild → push  │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  STAGE 4: PR Poll Loop (max_pr_cycles)              │
+│  1. repo-manager POLL PR COMMENTS                  │
+│  2. If NO ACTIONABLE → done                         │
+│  3. Extract comment IDs → MARK ADDRESSED            │
+│  4. developer addresses comments                    │
+│  5. build-agent verifies                            │
+│  6. Reviewer pass (all 3 reviewers in parallel)     │
+│  7. If findings → developer fixes → rebuild → push │
+│  8. SAVE CHECKPOINT (stage=3)                       │
+└──────────────────────┬──────────────────────────────┘
+                       ▼
+              "Pipeline complete. PR: ..."
+```
+
+### Web Server Flow (`create_app` in `/Users/anil/Source/OLamo/app/web/app.py`):
+
+```
+FastAPI lifespan:
+  setup() → Open DB, recover stale runs, spawn queued runs
+  ↑ serve requests
+  close() → Cancel tasks, close DB
+
+API Endpoints:
+  GET  /                          → SPA index.html
+  GET  /api/events                → SSE stream (with gap-fill via Last-Event-ID)
+  GET/POST /api/runs              → List/Create runs
+  POST /api/runs/{id}/resume      → Resume interrupted run
+  GET/POST /api/runs/{id}/approval → Design approval gate
+  GET  /api/runs/{id}/events      → Event history
+  GET  /api/runs/{id}/state       → Live run state
+  GET  /api/team                  → Agent configs & pipeline stages
+  GET/PUT /api/settings           → Settings CRUD
+  GET  /api/prs                   → GitHub PR list
+  GET  /api/prs/auth              → GH auth status
+```
+
+**RunManager execution** (`_execute_run`, line 149):
+1. Set status RUNNING, create log dir
+2. Lock settings store
+3. Merge per-run settings override
+4. Load checkpoint from DB
+5. Wire up `on_event` (broadcast + DB persist + run_state update)
+6. Wire up `on_approval_required` (ApprovalGate + spec persistence)
+7. Call `run_pipeline(...)` with checkpoint + save_checkpoint callback
+8. On success → COMPLETED, on error → FAILED
+9. Unlock settings store
+
+---
+
+## 6. Agent Types in `agents/` Directory
+
+**Path:** `/Users/anil/Source/OLamo/agents/`
+
+### Character Files (system prompts):
+| File | Role | Purpose |
+|------|------|---------|
+| `lead-developer.md` | **Lead Developer** | Planning (3 modes: Plan, Refine, Review Implementation). Does NOT write code. |
+| `developer.md` | **Developer** | Code implementation exactly per spec. Fixes issues/build failures only. |
+| `code-reviewer.md` | **Code Reviewer** | Bug/security/performance/quality review after implementation. |
+| `qa-engineer.md` | **QA Engineer** | Design review (testability) + Code review (PASS/FAIL per scenario). |
+| `build-agent.md` | **Build Agent** | Deploys, builds, compiles, smoke tests. Reports SUCCESS/FAILURE. |
+| `repo-manager.md` | **Repo Manager** | 5 modes: commit+PR, poll PR comments, push changes, mark comments addressed, poll CI checks. |
+
+### Prompt Templates: `/Users/anil/Source/OLamo/agents/prompts/`
+Contains per-role task templates (e.g., `prompts/pm/pipeline.md` for the PM system prompt) with `{{token}}` placeholder substitution.
+
+---
+
+## Architecture Summary Diagram
+
+```
+main.py
+ ├── CLI  → run_pipeline_cli → run_pipeline
+ │                           ├── PM Mode (claude-agent-sdk Task tool)
+ │                           └── Orchestrated Mode (Python loops)
+ │                               ├── AgentEngine Protocol
+ │                               │   ├── ClaudeEngine (claude-agent-sdk query())
+ │                               │   ├── CopilotEngine (github-copilot-sdk sessions)
+ │                               │   ├── CodexEngine (codex-app-server-sdk threads)
+ │                               │   ├── OpenAIEngine (openai chat completions + tool loop)
+ │                               │   └── MockEngine (canned responses, no API)
+ │                               └── Checkpoint → save/load → run_state table
+ └── Server → FastAPI (uvicorn)
+             ├── RunManager (queue, execute, track, resume)
+             ├── OLamoDb (SQLite: runs/events/run_state/agent_sessions)
+             ├── SseBroadcaster (fan-out to web clients)
+             └── SettingsStore (olamo-settings.json, lock/unlock)
+```
+
+**Key patterns:**
+- **Protocol-based engines**: `AgentEngine` Protocol allows plugging in any LLM backend
+- **Event-driven**: Every agent action emits events → broadcast via SSE + persisted to DB
+- **Resumable at 4 layers**: pipeline checkpoints, DB state, run status recovery, agent sessions
+- **Concurrency control**: `asyncio.Semaphore(max_concurrent=5)` limits parallel runs
+- **Settings lock**: Global settings locked during run execution; updates deferred until unlock
+Good, I have a comprehensive overview. Let me now dive into the critical files for this integration.
+Now let me look at the engine implementations, especially how sessions are created and resumed:
+Let me also check the database module, pipeline runner, and how the PM mode works:
+Let me check for any existing session resume patterns and the models:
+Let me check the existing plan and the models:
+Let me check existing tests and the mock engine:
+Let me check existing test patterns:
+Now I have a complete understanding of the codebase. I can see that Phase 1 (foundation) is largely already implemented — `run_id`, `agent_sessions` table, protocol changes, and threading are all in place. The remaining work is the core CopilotEngine rewrite for session naming, caching, persistence, and resume. Let me create the plan.
+Now let me set up tracking:
+Here's the plan summary:
+
+## Plan: Agent SDK Session Resume Integration
+
+**Problem**: `CopilotEngine` creates a new session every agent call, disconnects immediately, never names agents, and doesn't persist session IDs — so the SDK's `resume_session()` capability is completely unused.
+
+**What's already done** (foundation is solid): `run_id` generation (`YYYYMMDD_N`), `agent_sessions` DB table with CRUD, `AgentEngine` protocol updated, `run_id` threaded through the full call stack (runner → orchestrated → engine).
+
+### Remaining work (3 phases):
+
+**Phase 2 — CopilotEngine Session Naming + Reuse** (`app/engines/copilot.py`)
+- Name agents `{runID}_{agenttype}` via `client_name` parameter
+- Add in-process session cache — create once per `(run_id, role)`, reuse across calls
+- Remove `session.disconnect()` from `finally` when `run_id` is set
+- Add `stop()` cleanup of cached sessions + `close_run(run_id)` method
+
+**Phase 3 — Persistence + Cross-Restart Resume** (`app/engines/copilot.py` + `orchestrated.py`)
+- Persist session info to `agent_sessions` table on creation/resume
+- On restart: look up active sessions → attempt `resume_session()` → fallback to fresh on failure
+- Wire `close_run()` into pipeline's finally block for clean shutdown
+
+**Phase 4 — Tests** (`tests/test_copilot_sessions.py`)
+- Session reuse (mock SDK), resume path, resume fallback, `close_run()` scoping, backward compat
+
+Full plan saved to `plan.md`. Ready to implement when you give the word.
+
+ACTIVITY:
+[19:08:43] TOOL CALL: report_intent()
+[19:08:48] TOOL CALL: view()
+[19:08:48] TOOL CALL: bash()
+[19:08:48] TOOL CALL: bash()
+[19:08:58] TOOL CALL: bash()
+[19:08:58] TOOL CALL: bash()
+[19:08:58] TOOL CALL: bash()
+[19:08:58] TOOL CALL: bash()
+[19:08:58] TOOL CALL: bash()
+[19:09:04] MESSAGE: Now let me look at the current state of the files and run the tests:
+[19:09:04] TOOL CALL: view()
+[19:09:04] TOOL CALL: bash()
+[19:09:10] TOOL CALL: bash()
+[19:09:10] TOOL CALL: view()
+[19:09:17] MESSAGE: Now let me check a few more details — the `_session_persist_fn` unused field, the `run_id` column migration, and the pipeline's `finally` block ordering:
+[19:09:17] TOOL CALL: view()
+[19:09:17] TOOL CALL: view()
+[19:09:17] TOOL CALL: view()
+[19:09:25] MESSAGE: Now let me check a couple of edge cases — the `SUBSTR(run_id, 10)` assumption and whether the `_next_run_id` handles the default empty string `run_id` properly:
+[19:09:25] TOOL CALL: bash()
+[19:09:25] TOOL CALL: bash()
+[19:09:35] TOOL CALL: bash()
+[19:09:40] TOOL CALL: bash()
+[19:09:47] MESSAGE: Now let me check one important thing — the `run_state` table's `run_id` column references `runs(id)` as FK, but the new `runs.run_id` column is a human-readable format (`YYYYMMDD_N`), while `run_state.run_id` stores the UUID `runs.id`. Let me verify this is not confused:
+[19:09:47] TOOL CALL: view()
+[19:09:47] TOOL CALL: view()
+[19:09:55] MESSAGE: Good — the `run_id` passed to `run_pipeline` is the human-readable one (`run.run_id`), and it's separate from `run.id` (UUID) used for DB FK references in `events` and `run_state`. The `agent_sessions` table uses the human-readable `run_id` correctly since it's only used by the CopilotEngine for session management.
+
+Let me check one more thing — the `db_conn` parameter passed through from run_manager to the pipeline:
+[19:09:55] TOOL CALL: bash()
+[19:10:16] MESSAGE: All 257 tests pass. Here's my review:
+
+---
+
+## Code Review: Agent SDK Session Resume Integration
+
+### ✅ PASS — All 257 tests pass (including 12 new session-specific tests)
+
+### What was implemented:
+
+1. **CopilotEngine session naming + reuse** — Sessions cached per `(run_id, role)`, named `{runID}_{role}` via `client_name`
+2. **DB persistence + cross-restart resume** — Sessions persisted to `agent_sessions` table; on resume, attempts `resume_session()` with fallback to fresh
+3. **Clean lifecycle** — `close_run(run_id)` in pipeline `finally`, `stop()` disconnects all cached sessions
+4. **Protocol + all engines updated** — `run_id` param added to `AgentEngine` protocol and all 5 implementations
+5. **`run_id` generation** — `YYYYMMDD_N` format with atomic `asyncio.Lock`
+6. **DB migration** — `run_id` column added to `runs` table, `agent_sessions` schema auto-created
+
+### Findings:
+
+**1. Unused field: `_session_persist_fn`** — `app/engines/copilot.py:42`
+- `self._session_persist_fn: Callable | None = None` is declared in `__init__` but never read or set anywhere. Dead code.
+- **Severity**: Trivial (code hygiene)
+
+**2. `SUBSTR(run_id, 10)` assumes fixed format** — `app/web/run_manager.py:142`
+- Hardcodes offset 10 which assumes `YYYYMMDD_` (9 chars + 1). Works correctly for the current format but would silently break if the format changes. Not a bug — just fragile if the naming convention evolves.
+- **Severity**: Low (acceptable, documented in method docstring)
+
+**3. Review loop simplification is unrelated but bundled** — `app/pipeline/orchestrated.py`
+- The commit bundles significant pipeline review-loop refactoring (removing debate passes, adding per-finding response context) alongside the session resume work. These are conceptually separate changes. Makes bisecting harder if either introduces a regression.
+- **Severity**: Process concern only (not a code defect)
+
+---
+
+### **APPROVED**
+
+The session resume implementation is solid. Session caching, DB persistence, resume-from-DB with graceful fallback, backward compatibility (no `run_id` = old behavior), and clean shutdown are all well-tested. The one unused field is trivial cleanup.
+
+RESULT:
+Now let me look at the current state of the files and run the tests:
+Now let me check a few more details — the `_session_persist_fn` unused field, the `run_id` column migration, and the pipeline's `finally` block ordering:
+Now let me check a couple of edge cases — the `SUBSTR(run_id, 10)` assumption and whether the `_next_run_id` handles the default empty string `run_id` properly:
+Now let me check one important thing — the `run_state` table's `run_id` column references `runs(id)` as FK, but the new `runs.run_id` column is a human-readable format (`YYYYMMDD_N`), while `run_state.run_id` stores the UUID `runs.id`. Let me verify this is not confused:
+Good — the `run_id` passed to `run_pipeline` is the human-readable one (`run.run_id`), and it's separate from `run.id` (UUID) used for DB FK references in `events` and `run_state`. The `agent_sessions` table uses the human-readable `run_id` correctly since it's only used by the CopilotEngine for session management.
+
+Let me check one more thing — the `db_conn` parameter passed through from run_manager to the pipeline:
+All 257 tests pass. Here's my review:
+
+---
+
+## Code Review: Agent SDK Session Resume Integration
+
+### ✅ PASS — All 257 tests pass (including 12 new session-specific tests)
+
+### What was implemented:
+
+1. **CopilotEngine session naming + reuse** — Sessions cached per `(run_id, role)`, named `{runID}_{role}` via `client_name`
+2. **DB persistence + cross-restart resume** — Sessions persisted to `agent_sessions` table; on resume, attempts `resume_session()` with fallback to fresh
+3. **Clean lifecycle** — `close_run(run_id)` in pipeline `finally`, `stop()` disconnects all cached sessions
+4. **Protocol + all engines updated** — `run_id` param added to `AgentEngine` protocol and all 5 implementations
+5. **`run_id` generation** — `YYYYMMDD_N` format with atomic `asyncio.Lock`
+6. **DB migration** — `run_id` column added to `runs` table, `agent_sessions` schema auto-created
+
+### Findings:
+
+**1. Unused field: `_session_persist_fn`** — `app/engines/copilot.py:42`
+- `self._session_persist_fn: Callable | None = None` is declared in `__init__` but never read or set anywhere. Dead code.
+- **Severity**: Trivial (code hygiene)
+
+**2. `SUBSTR(run_id, 10)` assumes fixed format** — `app/web/run_manager.py:142`
+- Hardcodes offset 10 which assumes `YYYYMMDD_` (9 chars + 1). Works correctly for the current format but would silently break if the format changes. Not a bug — just fragile if the naming convention evolves.
+- **Severity**: Low (acceptable, documented in method docstring)
+
+**3. Review loop simplification is unrelated but bundled** — `app/pipeline/orchestrated.py`
+- The commit bundles significant pipeline review-loop refactoring (removing debate passes, adding per-finding response context) alongside the session resume work. These are conceptually separate changes. Makes bisecting harder if either introduces a regression.
+- **Severity**: Process concern only (not a code defect)
+
+---
+
+### **APPROVED**
+
+The session resume implementation is solid. Session caching, DB persistence, resume-from-DB with graceful fallback, backward compatibility (no `run_id` = old behavior), and clean shutdown are all well-tested. The one unused field is trivial cleanup.

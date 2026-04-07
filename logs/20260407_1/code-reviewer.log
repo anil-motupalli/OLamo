@@ -1,0 +1,118 @@
+
+────────────────────────────────────────────────────────────
+[2026-04-07T19:09:46Z] PROMPT (68277ms):
+Review the implementation.
+
+ACTIVITY:
+[19:08:45] TOOL CALL: report_intent()
+[19:08:45] TOOL CALL: bash()
+[19:08:45] TOOL CALL: bash()
+[19:08:45] TOOL CALL: bash()
+[19:08:50] TOOL CALL: bash()
+[19:08:56] TOOL CALL: bash()
+[19:08:56] TOOL CALL: bash()
+[19:08:56] TOOL CALL: bash()
+[19:09:02] MESSAGE: Now let me look at the new files:
+[19:09:02] TOOL CALL: bash()
+[19:09:02] TOOL CALL: bash()
+[19:09:09] TOOL CALL: view()
+[19:09:09] TOOL CALL: view()
+[19:09:14] MESSAGE: Now let me look at the relevant context for the orchestrated pipeline to understand how `close_run` interacts with `stop`:
+[19:09:14] TOOL CALL: view()
+[19:09:14] TOOL CALL: view()
+[19:09:18] MESSAGE: Let me verify the `_execute_run` flow to understand the `db_conn` passing pattern:
+[19:09:18] TOOL CALL: view()
+[19:09:24] MESSAGE: Now let me run the tests to validate:
+[19:09:24] TOOL CALL: bash()
+[19:09:46] MESSAGE: All 88 tests pass. Here's my review:
+
+---
+
+## Code Review: Copilot Session Reuse & Persistence
+
+**Scope:** Adds `run_id`-based session reuse for `CopilotEngine`, a new `agent_sessions` DB table, human-readable run IDs (`YYYYMMDD_N`), and related pipeline plumbing.
+
+### Findings
+
+**1. Bug — `mark_all_closed_for_run` is never called**
+- **File:** `app/pipeline/orchestrated.py` (~line 418-424), `app/db/sessions.py` (line 117-127)
+- **Type:** Quality | **Severity:** Low
+- **Description:** `close_run()` iterates `_session_cache` and calls `mark_closed` per role, but if the process crashes before `close_run` finishes, some sessions remain "active" in DB. The `mark_all_closed_for_run` function exists for bulk-closing but is unused. This is a missed opportunity for a single atomic UPDATE instead of N individual ones.
+- **Suggested fix:** In `close_run`, call `mark_all_closed_for_run` once instead of per-session `mark_closed` loops (and same in `stop()`). Or at least call it as a safety net.
+
+**2. Bug — `_next_run_id` race with concurrent enqueues from different processes**
+- **File:** `app/web/run_manager.py` (~line 131-148)
+- **Type:** Quality | **Severity:** Low (acknowledged in comment)
+- **Description:** The code correctly documents the asyncio.Lock is single-process only. The `SUBSTR(run_id, 10)` extraction is fragile — it assumes the date prefix is always 9 chars (`YYYYMMDD_`). This is fine today but brittle if format changes. Low risk since it's documented.
+- **Suggested fix:** No action required now; the comment adequately warns.
+
+**3. Quality — `run_manager.py` accesses private `_db._conn`**
+- **File:** `app/web/run_manager.py` (lines 245, 131)
+- **Type:** Quality | **Severity:** Medium
+- **Description:** `self._db._conn` is accessed directly in two places (`_next_run_id` and `run_pipeline` call). This violates encapsulation of `OLamoDb`. If `OLamoDb` ever lazily reconnects, this could break.
+- **Suggested fix:** Add a public `conn` property or `get_conn()` method to `OLamoDb`.
+
+**4. Quality — `set_db_conn` pragma: no cover**
+- **File:** `app/engines/copilot.py` (~line 42)
+- **Type:** Quality | **Severity:** Low
+- **Description:** `set_db_conn` is marked `# pragma: no cover` but is simple enough to test. The session tests already mock `_db_conn` directly, so this path is untested. Minor — not blocking.
+
+### What looks good
+- **Backward compatibility:** `run_id=None` preserves the legacy create/disconnect-per-call path, verified by tests.
+- **Session lifecycle:** Cache → DB resume → fresh creation fallback is well-structured with proper error handling.
+- **Test coverage:** The new `test_copilot_sessions.py` is thorough — covers reuse, naming, close, resume success/failure, backward compat, and stop cleanup.
+- **Schema migration:** `ALTER TABLE runs ADD COLUMN run_id TEXT NOT NULL DEFAULT ''` is safe for existing data.
+- **Pipeline cleanup:** `close_run` in the `finally` block before `stop()` ensures sessions are properly closed.
+
+---
+
+**APPROVED** — The implementation is solid. Finding #3 (private `_conn` access) is the most actionable improvement but not blocking.
+
+RESULT:
+Now let me look at the new files:
+Now let me look at the relevant context for the orchestrated pipeline to understand how `close_run` interacts with `stop`:
+Let me verify the `_execute_run` flow to understand the `db_conn` passing pattern:
+Now let me run the tests to validate:
+All 88 tests pass. Here's my review:
+
+---
+
+## Code Review: Copilot Session Reuse & Persistence
+
+**Scope:** Adds `run_id`-based session reuse for `CopilotEngine`, a new `agent_sessions` DB table, human-readable run IDs (`YYYYMMDD_N`), and related pipeline plumbing.
+
+### Findings
+
+**1. Bug — `mark_all_closed_for_run` is never called**
+- **File:** `app/pipeline/orchestrated.py` (~line 418-424), `app/db/sessions.py` (line 117-127)
+- **Type:** Quality | **Severity:** Low
+- **Description:** `close_run()` iterates `_session_cache` and calls `mark_closed` per role, but if the process crashes before `close_run` finishes, some sessions remain "active" in DB. The `mark_all_closed_for_run` function exists for bulk-closing but is unused. This is a missed opportunity for a single atomic UPDATE instead of N individual ones.
+- **Suggested fix:** In `close_run`, call `mark_all_closed_for_run` once instead of per-session `mark_closed` loops (and same in `stop()`). Or at least call it as a safety net.
+
+**2. Bug — `_next_run_id` race with concurrent enqueues from different processes**
+- **File:** `app/web/run_manager.py` (~line 131-148)
+- **Type:** Quality | **Severity:** Low (acknowledged in comment)
+- **Description:** The code correctly documents the asyncio.Lock is single-process only. The `SUBSTR(run_id, 10)` extraction is fragile — it assumes the date prefix is always 9 chars (`YYYYMMDD_`). This is fine today but brittle if format changes. Low risk since it's documented.
+- **Suggested fix:** No action required now; the comment adequately warns.
+
+**3. Quality — `run_manager.py` accesses private `_db._conn`**
+- **File:** `app/web/run_manager.py` (lines 245, 131)
+- **Type:** Quality | **Severity:** Medium
+- **Description:** `self._db._conn` is accessed directly in two places (`_next_run_id` and `run_pipeline` call). This violates encapsulation of `OLamoDb`. If `OLamoDb` ever lazily reconnects, this could break.
+- **Suggested fix:** Add a public `conn` property or `get_conn()` method to `OLamoDb`.
+
+**4. Quality — `set_db_conn` pragma: no cover**
+- **File:** `app/engines/copilot.py` (~line 42)
+- **Type:** Quality | **Severity:** Low
+- **Description:** `set_db_conn` is marked `# pragma: no cover` but is simple enough to test. The session tests already mock `_db_conn` directly, so this path is untested. Minor — not blocking.
+
+### What looks good
+- **Backward compatibility:** `run_id=None` preserves the legacy create/disconnect-per-call path, verified by tests.
+- **Session lifecycle:** Cache → DB resume → fresh creation fallback is well-structured with proper error handling.
+- **Test coverage:** The new `test_copilot_sessions.py` is thorough — covers reuse, naming, close, resume success/failure, backward compat, and stop cleanup.
+- **Schema migration:** `ALTER TABLE runs ADD COLUMN run_id TEXT NOT NULL DEFAULT ''` is safe for existing data.
+- **Pipeline cleanup:** `close_run` in the `finally` block before `stop()` ensures sessions are properly closed.
+
+---
+
+**APPROVED** — The implementation is solid. Finding #3 (private `_conn` access) is the most actionable improvement but not blocking.

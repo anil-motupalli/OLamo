@@ -65,7 +65,16 @@ Events emitted by `on_event` callbacks and broadcast to the browser:
 | `agent_completed` | `role`, `success`, `elapsed_ms`, `summary` |
 | `awaiting_approval` | `run_id`, `spec` |
 | `design_approval_received` | `run_id`, `approved` |
+| `design_plan_created` | `revision: 0`, `plan` |
+| `design_review_findings` | `revision`, `findings`, `decision` |
+| `design_plan_revised` | `revision`, `plan`, `responses` |
+| `design_approved` | `plan` |
 
 ## Database
 
-SQLite via `aiosqlite`. Schema and queries in `app/web/database.py` (`OLamoDb`). Stores `runs` and `run_state` (checkpoint JSON per run). `RunManager` loads all runs on startup — interrupted runs surface as `INTERRUPTED` and can be resumed via `POST /api/runs/{id}/resume`.
+SQLite via `aiosqlite`. Schema and queries in `app/web/database.py` (`OLamoDb`).
+
+**Location:** `~/.OLamo/olamo.db` (app-global, not project-local)
+**Logs:** `~/.OLamo/logs/<run_id>/` — per-agent logs written by `_write_agent_log()` in `orchestrated.py`
+
+Stores `runs` and `run_state` (checkpoint JSON per run). `RunManager` loads all runs on startup — interrupted runs surface as `INTERRUPTED` and can be resumed via `POST /api/runs/{id}/resume`.

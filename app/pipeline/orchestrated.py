@@ -18,7 +18,7 @@ from ..models import (
 )
 from ..agents import AGENT_CONFIGS
 from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
-from .helpers import _reviewer_prompt, _extract_comment_ids
+from .helpers import _reviewer_prompt, _extract_comment_ids, parse_review_json, parse_finding_responses, FINDING_RESPONSES_SEP
 
 
 def _write_agent_log(log_dir: str, role: str, prompt: str, lines: list[str], result: str, elapsed_ms: int) -> None:
@@ -170,33 +170,55 @@ async def run_pipeline_orchestrated(
             await stage("Stage 1: Design", cycle=0)
             plan = await call("lead-developer", task)
 
-            qa_result = ""
+            # Emit initial plan as revision 0
+            await on_event({"type": "design_plan_created", "revision": 0, "plan": plan})
+
             qa_approved = False
-            lead_dev_response = ""  # lead-dev's per-finding response from last refinement
+            pending_findings: list[dict] = []
 
             for i in range(settings.max_design_cycles):
                 await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
                 qa_prompt = f"REVIEW DESIGN:\n\n{plan}"
-                if lead_dev_response:
-                    qa_prompt += f"\n\n---\n\nLead developer's per-finding response from last revision:\n{lead_dev_response}"
+                if pending_findings:
+                    # Include previous finding responses to help QA decide on pushbacks
+                    qa_prompt += f"\n\n---\n\nLead developer's responses to previous findings are embedded in the plan below the {FINDING_RESPONSES_SEP!r} marker."
                 qa_result = await call("qa-engineer", qa_prompt)
-                if "APPROVED" in qa_result.upper():
+                review = parse_review_json(qa_result)
+
+                # Emit findings for this cycle
+                await on_event({
+                    "type": "design_review_findings",
+                    "revision": i,
+                    "findings": review["findings"],
+                    "decision": review["decision"],
+                })
+
+                if review["decision"] == "Approved" or not review["findings"]:
                     qa_approved = True
                     break
                 if i < settings.max_design_cycles - 1:
-                    lead_dev_response = await call(
+                    findings_json = __import__("json").dumps(review["findings"])
+                    lead_result = await call(
                         "lead-developer",
-                        f"Task:\n{task}\n\nCurrent Plan:\n{plan}\n\nQA Findings:\n{qa_result}",
+                        f"Task:\n{task}\n\nCurrent Plan:\n{plan}\n\nQA Findings (JSON):\n{findings_json}",
                     )
-                    # lead-dev outputs revised plan + "## Response to QA Findings" section
-                    plan = lead_dev_response
+                    revised_plan, finding_responses = parse_finding_responses(lead_result)
+                    plan = revised_plan if revised_plan else lead_result
+                    pending_findings = finding_responses
+
+                    # Emit revised plan with per-finding responses
+                    await on_event({
+                        "type": "design_plan_revised",
+                        "revision": i + 1,
+                        "plan": plan,
+                        "responses": finding_responses,
+                    })
+
+            # Emit final approved event
+            await on_event({"type": "design_approved", "plan": plan})
 
             # Build the human-review spec: full design plan + QA's final assessment
-            qa_section = ""
-            if qa_result:
-                status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns (max cycles reached)"
-                qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
-            spec_for_review = plan + qa_section
+            spec_for_review = plan
 
             # Optional human approval gate after design loop — skipped in headless mode
             if on_approval_required is not None and not settings.headless:
@@ -221,14 +243,20 @@ async def run_pipeline_orchestrated(
                             f"Plan:\n{plan}\n\n"
                             f"Feedback:\n{feedback}{comment_text}",
                         )
+                        # Strip any finding-responses separator from human-feedback-driven refinement
+                        plan, _ = parse_finding_responses(plan)
                         # Rebuild the spec for the next review round with updated plan + fresh QA run
                         qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
-                        qa_approved = "APPROVED" in qa_result.upper()
-                        qa_section = ""
-                        if qa_result:
-                            status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns"
-                            qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
-                        spec_for_review = plan + qa_section
+                        qa_review = parse_review_json(qa_result)
+                        qa_approved = qa_review["decision"] == "Approved"
+                        await on_event({
+                            "type": "design_review_findings",
+                            "revision": -1,
+                            "findings": qa_review["findings"],
+                            "decision": qa_review["decision"],
+                        })
+                        await on_event({"type": "design_approved", "plan": plan})
+                        spec_for_review = plan
                         dev_response = plan[:300].strip()
 
             if save_checkpoint:
@@ -244,17 +272,20 @@ async def run_pipeline_orchestrated(
         if not pr_url and completed_stage < 3:
             # ── Stage 2: Implementation Loop ─────────────────────────────────────────
             await stage("Stage 2: Implementation", cycle=0)
-            findings = ""
+            impl_findings: list[dict] = []
             already_approved: set[str] = set()
 
             for impl_cycle in range(settings.max_impl_cycles):
                 await stage(f"Implementation cycle {impl_cycle + 1}/{settings.max_impl_cycles}", cycle=impl_cycle + 1)
 
-                impl_prompt = (
-                    plan if not findings
-                    else f"{plan}\n\nReview findings to address:\n{findings}"
-                )
-                dev_response = await call("developer", impl_prompt)
+                if not impl_findings:
+                    impl_prompt = plan
+                else:
+                    import json as _json
+                    impl_prompt = f"{plan}\n\nReview findings to address (JSON):\n{_json.dumps(impl_findings)}"
+                dev_result = await call("developer", impl_prompt)
+                # Parse developer's per-finding responses
+                dev_summary, dev_responses = parse_finding_responses(dev_result)
 
                 # Build loop
                 build_ok = False
@@ -265,41 +296,47 @@ async def run_pipeline_orchestrated(
                         build_ok = True
                         break
                     if build_cycle < settings.max_build_cycles - 1:
-                        dev_response = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                        dev_result = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                        dev_summary, dev_responses = parse_finding_responses(dev_result)
 
                 if not build_ok:
-                    findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
+                    impl_findings = [{"id": "build-fail", "type": "Bug", "severity": "Critical",
+                                      "file": None, "line": 0,
+                                      "description": f"Build failed after {settings.max_build_cycles} retries",
+                                      "suggestion": build_output[:500]}]
                     break
 
-                # Code review — pass developer's per-finding response as context so reviewers can
-                # weigh pushbacks before deciding to maintain or drop findings.
+                # Code review — pass developer's per-finding JSON responses so reviewers can weigh pushbacks
                 diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
-                dev_response_ctx = (
-                    f"\n\nDeveloper's per-finding response:\n{dev_response}"
-                    if dev_response and findings else ""
-                )
+                dev_resp_ctx = ""
+                if dev_responses:
+                    import json as _json2
+                    dev_resp_ctx = f"\n\n---FINDING_RESPONSES---\n{_json2.dumps(dev_responses)}"
                 pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
 
-                reviewer_results: dict[str, str] = {}
+                reviewer_results: dict[str, dict] = {}
                 if pending:
-                    results = await asyncio.gather(
-                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in pending]
+                    raw_results = await asyncio.gather(
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_resp_ctx) for r in pending]
                     )
-                    for role, result in zip(pending, results):
-                        reviewer_results[role] = result
-                        if "NEEDS IMPROVEMENT" not in result.upper():
+                    for role, raw in zip(pending, raw_results):
+                        review = parse_review_json(raw)
+                        reviewer_results[role] = review
+                        if review["decision"] == "Approved":
                             already_approved.add(role)
 
-                combined = "\n".join(reviewer_results.values())
-                has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
+                # Re-invite approved reviewers if any pending reviewer found critical issues
+                combined_findings = [f for rv in reviewer_results.values() for f in rv.get("findings", [])]
+                has_critical = any(f.get("severity") in ("Critical", "MustHave") for f in combined_findings)
                 if has_critical and already_approved:
                     reinvite = list(already_approved)
                     re_results = await asyncio.gather(
-                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in reinvite]
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_resp_ctx) for r in reinvite]
                     )
-                    for role, result in zip(reinvite, re_results):
-                        reviewer_results[role] = result
-                        if "NEEDS IMPROVEMENT" in result.upper():
+                    for role, raw in zip(reinvite, re_results):
+                        review = parse_review_json(raw)
+                        reviewer_results[role] = review
+                        if review["decision"] == "NeedsImprovement":
                             already_approved.discard(role)
                 elif already_approved:
                     await on_event({
@@ -307,9 +344,11 @@ async def run_pipeline_orchestrated(
                         "text": f"Skipping approved reviewer(s): {', '.join(sorted(already_approved))}",
                     })
 
-                findings = "\n\n---\n\n".join(
-                    r for r in reviewer_results.values() if "NEEDS IMPROVEMENT" in r.upper()
-                )
+                impl_findings = [
+                    f for rv in reviewer_results.values()
+                    if rv.get("decision") == "NeedsImprovement"
+                    for f in rv.get("findings", [])
+                ]
 
                 if save_checkpoint:
                     await save_checkpoint({
@@ -321,7 +360,7 @@ async def run_pipeline_orchestrated(
                         "already_approved": list(already_approved),
                     })
 
-                if not findings:
+                if not impl_findings:
                     break
 
             # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
@@ -390,12 +429,17 @@ async def run_pipeline_orchestrated(
 
             # One reviewer pass after PR comment fix
             diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
-            reviews = await asyncio.gather(
+            raw_reviews = await asyncio.gather(
                 *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in _ALL_REVIEWERS]
             )
-            review_findings = "\n\n---\n\n".join(r for r in reviews if "NEEDS IMPROVEMENT" in r.upper())
-            if review_findings:
-                await call("developer", f"Address review findings before pushing:\n{review_findings}")
+            pr_review_findings = [
+                f for raw in raw_reviews
+                for f in parse_review_json(raw).get("findings", [])
+                if parse_review_json(raw).get("decision") == "NeedsImprovement"
+            ]
+            if pr_review_findings:
+                import json as _json3
+                await call("developer", f"Address review findings before pushing:\n{_json3.dumps(pr_review_findings)}")
                 build_output = await call("build-agent", "Build and test the project.")
                 if "FAILURE" in build_output.upper():
                     await call("developer", f"FIX BUILD FAILURE:\n{build_output}")

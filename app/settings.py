@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import asdict
 from pathlib import Path
 
 from .models import AppSettings, _settings_from_dict
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsStore:
@@ -65,8 +68,12 @@ class SettingsStore:
                 cleaned = self._strip_jsonc_comments(raw)
                 data = json.loads(cleaned)
                 return _settings_from_dict(data)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load settings from %s: %s — using defaults",
+                    self._SETTINGS_FILE,
+                    exc,
+                )
         return AppSettings()
 
     def _save(self) -> None:

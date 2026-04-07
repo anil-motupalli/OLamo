@@ -22,8 +22,7 @@ except ImportError:
     PermissionHandler = None   # type: ignore
 
 from .base import AgentEngine
-from ..models import AppSettings, ModelConfig
-
+from ..models import AppSettings, ModelConfig, resolve_secret
 logger = logging.getLogger(__name__)
 
 # Default timeout: 30 minutes — enough for complex developer/build tasks.
@@ -217,7 +216,7 @@ class CopilotEngine:
             kwargs["provider"] = {
                 "type": model_config.provider_type or "openai",
                 "base_url": model_config.base_url,
-                "api_key": model_config.api_key,
+                "api_key": resolve_secret(model_config.api_key),
             }
 
         try:

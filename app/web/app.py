@@ -72,11 +72,13 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
                     import json as _json
                     yield {"id": str(evt.get("seq", "")), "data": _json.dumps(evt)}
             try:
+                import json as _json
                 while True:
                     data = await q.get()
                     if data is None:
                         break
-                    yield {"data": data}
+                    seq = _json.loads(data).get("seq", "")
+                    yield {"id": str(seq), "data": data}
             finally:
                 await broadcaster.disconnect(cid)
 

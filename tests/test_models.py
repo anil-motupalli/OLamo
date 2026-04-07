@@ -143,6 +143,7 @@ class TestRunRecord:
         assert RunStatus.RUNNING == "running"
         assert RunStatus.COMPLETED == "completed"
         assert RunStatus.FAILED == "failed"
+        assert RunStatus.INTERRUPTED == "interrupted"
 
     def test_pr_url_defaults_to_empty_string(self):
         r = RunRecord(id="abc", description="test")

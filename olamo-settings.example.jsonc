@@ -39,7 +39,13 @@
         "model": "opus",          // Model name (e.g. "opus", "sonnet", "gpt-5.4", "codex")
         "provider_type": "openai",
         "base_url": "",           // Required when mode is "advanced"
-        "api_key": "",            // Required when mode is "advanced"
+        // api_key: never commit real keys. Use one of these safe forms instead:
+        //   "env:MY_API_KEY"              → reads from the MY_API_KEY environment variable
+        //   "keyring:service/account"     → reads from OS keychain (macOS Keychain,
+        //                                   Windows Credential Manager, Linux SecretService)
+        //                                   Requires: pip install keyring
+        //                                   Store: python -c "import keyring; keyring.set_password('olamo','my_key','sk-...')"
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}        // Additional provider-specific params (JSON object)
       },
       "mcp_servers": {}           // MCP server configs (name → {command, args, env})

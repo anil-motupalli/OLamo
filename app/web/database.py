@@ -53,6 +53,7 @@ class OLamoDb:
                 id                TEXT PRIMARY KEY,
                 description       TEXT NOT NULL,
                 status            TEXT NOT NULL,
+                run_id            TEXT NOT NULL DEFAULT '',
                 queued_at         TEXT NOT NULL,
                 started_at        TEXT,
                 completed_at      TEXT,
@@ -110,7 +111,6 @@ class OLamoDb:
             "ALTER TABLE events ADD COLUMN summary TEXT",
             "ALTER TABLE events ADD COLUMN content_path TEXT",
             "ALTER TABLE events ADD COLUMN pr_url TEXT",
-            "ALTER TABLE runs ADD COLUMN run_id TEXT NOT NULL DEFAULT ''",
         ]:
             try:
                 await self._conn.execute(col)
@@ -123,7 +123,7 @@ class OLamoDb:
             id=row["id"],
             description=row["description"],
             status=RunStatus(row["status"]),
-            run_id=row["run_id"] if "run_id" in row.keys() else "",
+            run_id=row["run_id"],
             queued_at=row["queued_at"],
             started_at=row["started_at"],
             completed_at=row["completed_at"],
@@ -145,7 +145,9 @@ class OLamoDb:
                 started_at        = excluded.started_at,
                 completed_at      = excluded.completed_at,
                 error             = excluded.error,
-                log_dir           = excluded.log_dir
+                log_dir           = excluded.log_dir,
+                pr_url            = excluded.pr_url,
+                settings_override = excluded.settings_override
             """,
             (
                 run.id, run.description, run.status.value, run.run_id,

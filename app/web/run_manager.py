@@ -184,8 +184,9 @@ class RunManager:
         self.pending_approvals[run.id] = gate
 
         async def on_event(evt: dict) -> None:
-            await self._broadcaster.broadcast(evt)
             seq = await self._db.insert_event(run.id, evt)
+            evt["seq"] = seq
+            await self._broadcaster.broadcast(evt)
             evt_type = evt.get("type")
             if evt_type == "stage_changed":
                 stage = evt["stage"]

@@ -46,8 +46,7 @@ except ImportError:
     AsyncOpenAI = None  # type: ignore
 
 from .base import AgentEngine
-from ..models import AppSettings, ModelConfig
-
+from ..models import AppSettings, ModelConfig, resolve_secret
 
 # ---------------------------------------------------------------------------
 # Tool schemas (OpenAI function-calling format)
@@ -311,7 +310,7 @@ class OpenAIEngine:
 
     def _client(self, model_config: ModelConfig) -> "AsyncOpenAI":
         api_key = (
-            model_config.api_key
+            resolve_secret(model_config.api_key)
             or os.environ.get("OPENAI_API_KEY")
             or os.environ.get("Z_AI_API_KEY")
             or "sk-placeholder"

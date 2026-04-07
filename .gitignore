@@ -10,3 +10,5 @@ logs/
 olamo.db
 olamo.db-shm
 olamo.db-wal
+# Generated local artifacts
+.superpowers/

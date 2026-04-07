@@ -19,8 +19,7 @@ from claude_agent_sdk import (
 )
 
 from .base import AgentEngine
-from ..models import AppSettings, ModelConfig
-
+from ..models import AppSettings, ModelConfig, resolve_secret
 
 def _make_env(settings: AppSettings) -> dict[str, str]:
     """Build the subprocess env dict: bypass nested-session guard + optional base URL."""
@@ -55,7 +54,7 @@ class ClaudeEngine:
         env = _make_env(self._settings)
         # Apply per-agent model config overrides — api_key + base_url always respected
         if model_config.api_key:
-            env["ANTHROPIC_API_KEY"] = model_config.api_key
+            env["ANTHROPIC_API_KEY"] = resolve_secret(model_config.api_key)
         if model_config.base_url:
             env["ANTHROPIC_BASE_URL"] = model_config.base_url
 

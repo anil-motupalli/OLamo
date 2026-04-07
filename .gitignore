@@ -1,0 +1,14 @@
+venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+olamo-settings.json
+# Runtime data (now at ~/.OLamo/)
+logs/
+olamo.db
+olamo.db-shm
+olamo.db-wal
+# Generated local artifacts
+.superpowers/

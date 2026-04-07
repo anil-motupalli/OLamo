@@ -1,0 +1,88 @@
+{
+  "pm_model": "opus",
+  "opus_model": "opus",
+  "sonnet_model": "sonnet",
+  "haiku_model": "haiku",
+  "max_design_cycles": 2,
+  "max_build_cycles": 3,
+  "max_impl_cycles": 3,
+  "max_pr_cycles": 2,
+  "api_base_url": "",
+  "orchestration_mode": "orchestrated",
+  "agent_configs": {
+    "lead-developer": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "advanced",
+        "model": "glm-5v-turbo",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    },
+    "developer": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "advanced",
+        "model": "glm-5.1",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    },
+    "code-reviewer": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5.1",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    },
+    "qa-engineer": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5.1",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    },
+    "build-agent": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    },
+    "repo-manager": {
+      "engine": "copilot",
+      "model_config": {
+        "mode": "chat",
+        "model": "glm-5",
+        "provider_type": "openai",
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
+        "extra_params": {}
+      },
+      "mcp_servers": {}
+    }
+  },
+  "copilot_github_token": "",
+  "headless": false
+}

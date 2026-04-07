@@ -169,37 +169,24 @@ async def run_pipeline_orchestrated(
 
             qa_result = ""
             qa_approved = False
+            lead_dev_response = ""  # lead-dev's per-finding response from last refinement
+
             for i in range(settings.max_design_cycles):
                 await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
-                qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
+                qa_prompt = f"REVIEW DESIGN:\n\n{plan}"
+                if lead_dev_response:
+                    qa_prompt += f"\n\n---\n\nLead developer's per-finding response from last revision:\n{lead_dev_response}"
+                qa_result = await call("qa-engineer", qa_prompt)
                 if "APPROVED" in qa_result.upper():
                     qa_approved = True
                     break
                 if i < settings.max_design_cycles - 1:
-                    # Lead developer evaluates QA findings — may push back on out-of-scope items
-                    ld_eval = await call(
+                    lead_dev_response = await call(
                         "lead-developer",
-                        f"EVALUATE QA FEEDBACK:\n\nTask:\n{task}\n\nPlan:\n{plan}\n\nQA Findings:\n{qa_result}",
+                        f"Task:\n{task}\n\nCurrent Plan:\n{plan}\n\nQA Findings:\n{qa_result}",
                     )
-                    if "PUSHBACK" in ld_eval.upper():
-                        # QA evaluates the pushback — withdraws invalid findings or maintains valid ones
-                        qa_final = await call(
-                            "qa-engineer",
-                            f"EVALUATE PUSHBACK:\n\nTask:\n{task}\n\nOriginal Findings:\n{qa_result}\n\nLead Developer Response:\n{ld_eval}",
-                        )
-                        if "MAINTAIN" not in qa_final.upper():
-                            # All findings withdrawn — design is approved
-                            qa_result = qa_final
-                            qa_approved = True
-                            break
-                        qa_result = qa_final  # refined to only maintained findings
-                    # Refine plan based on accepted / maintained findings
-                    plan = await call(
-                        "lead-developer",
-                        f"REFINE the following plan based on QA findings.\n\n"
-                        f"Plan:\n{plan}\n\n"
-                        f"Findings:\n{qa_result}",
-                    )
+                    # lead-dev outputs revised plan + "## Response to QA Findings" section
+                    plan = lead_dev_response
 
             # Build the human-review spec: full design plan + QA's final assessment
             qa_section = ""
@@ -264,7 +251,7 @@ async def run_pipeline_orchestrated(
                     plan if not findings
                     else f"{plan}\n\nReview findings to address:\n{findings}"
                 )
-                await call("developer", impl_prompt)
+                dev_response = await call("developer", impl_prompt)
 
                 # Build loop
                 build_ok = False
@@ -275,53 +262,37 @@ async def run_pipeline_orchestrated(
                         build_ok = True
                         break
                     if build_cycle < settings.max_build_cycles - 1:
-                        await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                        dev_response = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
 
                 if not build_ok:
                     findings = f"Build failed after {settings.max_build_cycles} retries:\n{build_output}"
                     break
 
-                # Code review with smart skip — only re-invite approved reviewers on critical findings
+                # Code review — pass developer's per-finding response as context so reviewers can
+                # weigh pushbacks before deciding to maintain or drop findings.
                 diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
+                dev_response_ctx = (
+                    f"\n\nDeveloper's per-finding response:\n{dev_response}"
+                    if dev_response and findings else ""
+                )
                 pending = [r for r in _ALL_REVIEWERS if r not in already_approved]
 
                 reviewer_results: dict[str, str] = {}
                 if pending:
                     results = await asyncio.gather(
-                        *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in pending]
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in pending]
                     )
                     for role, result in zip(pending, results):
                         reviewer_results[role] = result
                         if "NEEDS IMPROVEMENT" not in result.upper():
                             already_approved.add(role)
 
-                # Debate pass: developer may push back on reviewer findings
-                for rev_role in list(reviewer_results):
-                    rev_result = reviewer_results[rev_role]
-                    if "NEEDS IMPROVEMENT" not in rev_result.upper():
-                        continue
-                    dev_eval = await call(
-                        "developer",
-                        f"EVALUATE REVIEW FINDINGS:\n\nTask / Plan:\n{plan}\n\nFindings from {rev_role}:\n{rev_result}",
-                    )
-                    if "PUSHBACK" in dev_eval.upper():
-                        rev_response = await call(
-                            rev_role,
-                            f"EVALUATE PUSHBACK:\n\nTask / Plan:\n{plan}\n\nOriginal Findings:\n{rev_result}\n\nDeveloper Response:\n{dev_eval}",
-                        )
-                        if "MAINTAIN" not in rev_response.upper():
-                            # All findings withdrawn — treat this reviewer as approved
-                            already_approved.add(rev_role)
-                            reviewer_results[rev_role] = rev_response
-                        else:
-                            reviewer_results[rev_role] = rev_response
-
                 combined = "\n".join(reviewer_results.values())
                 has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))
                 if has_critical and already_approved:
                     reinvite = list(already_approved)
                     re_results = await asyncio.gather(
-                        *[call(r, _reviewer_prompt(r, plan, diff_ctx)) for r in reinvite]
+                        *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_response_ctx) for r in reinvite]
                     )
                     for role, result in zip(reinvite, re_results):
                         reviewer_results[role] = result

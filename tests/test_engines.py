@@ -119,12 +119,35 @@ class TestClaudeEngine:
 
 class TestCopilotEngine:
     def _make_mock_session(self, result_content="copilot result"):
-        """Build a mock session using send_and_wait (the real SDK API)."""
+        """Build a mock session matching the event-driven SDK API.
+
+        The engine calls session.send() and subscribes via session.on().
+        We simulate an 'assistant.message' followed by 'session.idle'.
+        """
         session = MagicMock()
         session.disconnect = AsyncMock()
-        mock_event = MagicMock()
-        mock_event.data.content = result_content
-        session.send_and_wait = AsyncMock(return_value=mock_event)
+        session.send = AsyncMock()
+
+        idle_event_type = MagicMock()
+        idle_event_type.value = "session.idle"
+        idle_event = MagicMock()
+        idle_event.type = idle_event_type
+        idle_event.data = MagicMock()
+
+        msg_event_type = MagicMock()
+        msg_event_type.value = "assistant.message"
+        msg_event = MagicMock()
+        msg_event.type = msg_event_type
+        msg_event.data = MagicMock()
+        msg_event.data.content = result_content
+
+        def fake_on(handler):
+            # Immediately dispatch events synchronously to simulate SDK behavior
+            handler(msg_event)
+            handler(idle_event)
+            return lambda: None  # unsubscribe noop
+
+        session.on = MagicMock(side_effect=fake_on)
         return session
 
     @pytest.mark.asyncio

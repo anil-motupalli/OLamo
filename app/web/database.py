@@ -11,6 +11,7 @@ except ImportError:
     aiosqlite = None  # type: ignore  — only required for web/RunManager mode
 
 from ..models import RunRecord, RunStatus
+from ..db.sessions import ensure_schema as _ensure_agent_sessions
 
 
 class OLamoDb:
@@ -39,6 +40,7 @@ class OLamoDb:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._ensure_schema()
+        await _ensure_agent_sessions(self._conn)
 
     async def close(self) -> None:
         if self._conn:
@@ -108,6 +110,7 @@ class OLamoDb:
             "ALTER TABLE events ADD COLUMN summary TEXT",
             "ALTER TABLE events ADD COLUMN content_path TEXT",
             "ALTER TABLE events ADD COLUMN pr_url TEXT",
+            "ALTER TABLE runs ADD COLUMN run_id TEXT NOT NULL DEFAULT ''",
         ]:
             try:
                 await self._conn.execute(col)
@@ -120,6 +123,7 @@ class OLamoDb:
             id=row["id"],
             description=row["description"],
             status=RunStatus(row["status"]),
+            run_id=row["run_id"] if "run_id" in row.keys() else "",
             queued_at=row["queued_at"],
             started_at=row["started_at"],
             completed_at=row["completed_at"],
@@ -133,19 +137,20 @@ class OLamoDb:
         await self._conn.execute(
             """
             INSERT INTO runs
-              (id, description, status, queued_at, started_at, completed_at, error, log_dir, pr_url, settings_override)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, description, status, run_id, queued_at, started_at, completed_at, error, log_dir, pr_url, settings_override)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status            = excluded.status,
+                run_id            = excluded.run_id,
                 started_at        = excluded.started_at,
                 completed_at      = excluded.completed_at,
                 error             = excluded.error,
                 log_dir           = excluded.log_dir
             """,
             (
-                run.id, run.description, run.status.value, run.queued_at,
-                run.started_at, run.completed_at, run.error, run.log_dir,
-                run.pr_url, json.dumps(run.settings_override),
+                run.id, run.description, run.status.value, run.run_id,
+                run.queued_at, run.started_at, run.completed_at, run.error,
+                run.log_dir, run.pr_url, json.dumps(run.settings_override),
             ),
         )
         await self._conn.commit()

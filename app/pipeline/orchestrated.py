@@ -47,6 +47,7 @@ async def run_pipeline_orchestrated(
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
     log_dir: str | None = None,
     run_id: str | None = None,
+    db_conn=None,
 ) -> str:
     """Orchestration driven entirely by Python — no PM LLM, deterministic loops."""
 
@@ -77,6 +78,8 @@ async def run_pipeline_orchestrated(
         await claude_engine.start()
         engines_to_stop.append(claude_engine)
         if copilot_engine:
+            if db_conn is not None:
+                copilot_engine.set_db_conn(db_conn)
             await copilot_engine.start()
             engines_to_stop.append(copilot_engine)
         if codex_engine:
@@ -412,5 +415,12 @@ async def run_pipeline_orchestrated(
 
         return f"Pipeline complete. PR: {pr_result[:200]}"
     finally:
+        # Close per-run sessions for CopilotEngine (disconnects, marks DB closed)
+        for eng in engines_to_stop:
+            if isinstance(eng, CopilotEngine) and run_id:
+                try:
+                    await eng.close_run(run_id)
+                except Exception:
+                    pass
         for eng in engines_to_stop:
             await eng.stop()

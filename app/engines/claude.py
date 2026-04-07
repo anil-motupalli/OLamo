@@ -50,6 +50,7 @@ class ClaudeEngine:
         model_config: ModelConfig,
         mcp_servers: dict[str, dict],
         on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
     ) -> str:
         env = _make_env(self._settings)
         # Apply per-agent model config overrides — api_key + base_url always respected

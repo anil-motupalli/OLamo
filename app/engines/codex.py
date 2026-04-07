@@ -79,6 +79,7 @@ class CodexEngine:
         model_config: ModelConfig,
         mcp_servers: dict[str, dict],
         on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
     ) -> str:
         if self._client is None:
             raise RuntimeError("CodexEngine not started — call start() first")

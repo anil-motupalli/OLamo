@@ -24,6 +24,7 @@ async def run_pipeline_pm(
     on_event: Callable[[dict], Awaitable[None]],
     pr_url: str = "",
     on_approval_required: Callable[[str], Awaitable[dict]] | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Orchestration via a PM LLM that uses the Task tool to spawn sub-agents."""
     prompt = task

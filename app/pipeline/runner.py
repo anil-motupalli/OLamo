@@ -23,12 +23,14 @@ async def run_pipeline(
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
     log_dir: str | None = None,
+    run_id: str | None = None,
+    db_conn=None,
 ) -> str:
     if settings.orchestration_mode == "orchestrated":
         return await run_pipeline_orchestrated(
             task, settings, on_event, pr_url, on_approval_required,
             checkpoint=checkpoint, save_checkpoint=save_checkpoint,
-            log_dir=log_dir,
+            log_dir=log_dir, run_id=run_id, db_conn=db_conn,
         )
     return await run_pipeline_pm(task, settings, on_event, pr_url, on_approval_required)
 
@@ -74,7 +76,7 @@ async def run_pipeline_cli(
             from dataclasses import replace
             settings = replace(settings, headless=True, orchestration_mode="orchestrated")
             print("[HEADLESS MODE] Using MockEngine — no real API calls will be made.\n")
-        result = await run_pipeline(task, settings, on_event, pr_url=pr_url, on_approval_required=on_approval_required)
+        result = await run_pipeline(task, settings, on_event, pr_url=pr_url, on_approval_required=on_approval_required, run_id=None)
         print(f"\n{'=' * 60}")
         print("Pipeline Complete")
         print(f"{'=' * 60}")

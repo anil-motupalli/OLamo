@@ -348,6 +348,7 @@ class OpenAIEngine:
         model_config: ModelConfig,
         mcp_servers: dict[str, dict],
         on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
     ) -> str:
         client = self._client(model_config)
         tool_schemas = [_TOOL_SCHEMAS[t] for t in tools if t in _TOOL_SCHEMAS]

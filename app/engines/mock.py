@@ -70,6 +70,7 @@ class MockEngine:
         model_config: ModelConfig,
         mcp_servers: dict[str, dict],
         on_event: Callable[[dict], Awaitable[None]],
+        run_id: str | None = None,
     ) -> str:
         text = _CANNED.get(role, _DEFAULT)
         await on_event({"type": "agent_message", "role": role, "text": text[:300]})

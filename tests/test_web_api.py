@@ -537,16 +537,58 @@ class TestOrchestrationEngineRouting:
     @pytest.mark.asyncio
     async def test_copilot_engine_agents_invoke_copilot_client(self):
         """Agents configured for copilot engine go through CopilotEngine."""
-        session = MagicMock()
-        session.disconnect = AsyncMock()
-        mock_event = MagicMock()
-        mock_event.data.content = "APPROVED"
-        session.send_and_wait = AsyncMock(return_value=mock_event)
+        # Canned responses per role to advance the pipeline
+        _CANNED = {
+            "lead-developer": "APPROVED",
+            "developer": "implemented",
+            "code-reviewer": "APPROVED",
+            "qa-engineer": "APPROVED",
+            "build-agent": "BUILD SUCCESS",
+            "repo-manager": "https://github.com/mock/repo/pull/1\n\nNO ACTIONABLE COMMENTS",
+        }
+
+        def _make_session(content):
+            session = MagicMock()
+            session.disconnect = AsyncMock()
+            session.send = AsyncMock()
+
+            idle_et = MagicMock()
+            idle_et.value = "session.idle"
+            idle_evt = MagicMock()
+            idle_evt.type = idle_et
+            idle_evt.data = MagicMock()
+
+            msg_et = MagicMock()
+            msg_et.value = "assistant.message"
+            msg_evt = MagicMock()
+            msg_evt.type = msg_et
+            msg_evt.data = MagicMock()
+            msg_evt.data.content = content
+
+            def fake_on(handler):
+                handler(msg_evt)
+                handler(idle_evt)
+                return lambda: None
+
+            session.on = MagicMock(side_effect=fake_on)
+            return session
+
+        call_count = 0
+
+        async def _create_session(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            # Extract role from client_name if present
+            cn = kwargs.get("client_name", "")
+            role = cn.split("_", 1)[-1] if "_" in cn else "lead-developer"
+            content = _CANNED.get(role, "OK")
+            return _make_session(content)
 
         mock_client = MagicMock()
         mock_client.start = AsyncMock()
         mock_client.stop = AsyncMock()
-        mock_client.create_session = AsyncMock(return_value=session)
+        mock_client.create_session = AsyncMock(side_effect=_create_session)
+        mock_client.resume_session = AsyncMock(side_effect=Exception("no resume"))
 
         settings = AppSettings(
             orchestration_mode="orchestrated",
@@ -573,4 +615,4 @@ class TestOrchestrationEngineRouting:
 
         assert mock_client.start.call_count == 1
         assert mock_client.stop.call_count == 1
-        assert mock_client.create_session.call_count >= 8
+        assert call_count >= 8

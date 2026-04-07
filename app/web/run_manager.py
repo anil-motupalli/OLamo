@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from ..models import (
     AppSettings,
@@ -19,7 +21,12 @@ from ..pipeline.runner import run_pipeline
 from .broadcaster import SseBroadcaster
 from .database import OLamoDb
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_MAX_CONCURRENT = 5
+
+# Module-level lock for run_id generation (single-process; migrate to SQL for multi-process)
+_run_id_lock = asyncio.Lock()
 
 
 class RunManager:
@@ -77,9 +84,11 @@ class RunManager:
         await self._db.close()
 
     async def enqueue(self, description: str, pr_url: str = "", settings_override: dict | None = None) -> RunRecord:
+        run_id = await self._next_run_id(self._db._conn)
         run = RunRecord(
             id=str(uuid.uuid4()),
             description=description,
+            run_id=run_id,
             pr_url=pr_url,
             settings_override=settings_override or {},
         )
@@ -119,10 +128,28 @@ class RunManager:
     def start(self) -> None:
         pass  # No longer needed — tasks are spawned directly in setup()/enqueue()
 
+    @staticmethod
+    async def _next_run_id(conn: "aiosqlite.Connection") -> str:  # type: ignore
+        """Generate the next run_id in YYYYMMDD_N format.
+
+        Uses an asyncio.Lock for atomicity within a single process.
+        If multi-process enqueue is needed later, migrate to a pure SQL
+        approach using INSERT ... SELECT MAX()+1 inside a transaction.
+        """
+        date_part = datetime.now(timezone.utc).strftime("%Y%m%d")
+        async with _run_id_lock:
+            cursor = await conn.execute(
+                "SELECT MAX(CAST(SUBSTR(run_id, 10) AS INTEGER)) FROM runs WHERE run_id LIKE ?",
+                (f"{date_part}%",),
+            )
+            row = await cursor.fetchone()
+            current_max = row[0] if row and row[0] is not None else 0
+            return f"{date_part}_{current_max + 1}"
+
     async def _execute_run(self, run: RunRecord) -> None:
         run.status = RunStatus.RUNNING
         run.started_at = datetime.now(timezone.utc).isoformat()
-        log_dir = Path("logs") / run.id
+        log_dir = Path("logs") / (run.run_id or run.id)
         log_dir.mkdir(parents=True, exist_ok=True)
         run.log_dir = str(log_dir)
         await self._db.upsert_run(run)
@@ -214,6 +241,8 @@ class RunManager:
                 checkpoint=checkpoint,
                 save_checkpoint=save_ckpt,
                 log_dir=str(log_dir),
+                run_id=run.run_id or None,
+                db_conn=self._db._conn,
             )
             run.status = RunStatus.COMPLETED
             run.completed_at = datetime.now(timezone.utc).isoformat()

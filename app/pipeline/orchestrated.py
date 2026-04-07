@@ -165,10 +165,13 @@ async def run_pipeline_orchestrated(
             await stage("Stage 1: Design", cycle=0)
             plan = await call("lead-developer", task)
 
+            qa_result = ""
+            qa_approved = False
             for i in range(settings.max_design_cycles):
                 await stage(f"Design cycle {i + 1}/{settings.max_design_cycles}", cycle=i + 1)
                 qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
                 if "APPROVED" in qa_result.upper():
+                    qa_approved = True
                     break
                 if i < settings.max_design_cycles - 1:
                     plan = await call(
@@ -178,11 +181,18 @@ async def run_pipeline_orchestrated(
                         f"Findings:\n{qa_result}",
                     )
 
+            # Build the human-review spec: full design plan + QA's final assessment
+            qa_section = ""
+            if qa_result:
+                status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns (max cycles reached)"
+                qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+            spec_for_review = plan + qa_section
+
             # Optional human approval gate after design loop — skipped in headless mode
             if on_approval_required is not None and not settings.headless:
                 dev_response = ""  # developer's response to show on subsequent rounds
                 while True:
-                    gate_result = await on_approval_required(plan, dev_response)
+                    gate_result = await on_approval_required(spec_for_review, dev_response)
                     if gate_result.get("approved"):
                         break
                     feedback = gate_result.get("feedback", "")
@@ -201,7 +211,14 @@ async def run_pipeline_orchestrated(
                             f"Plan:\n{plan}\n\n"
                             f"Feedback:\n{feedback}{comment_text}",
                         )
-                        # Use the summary of the revised plan as developer response for the next round
+                        # Rebuild the spec for the next review round with updated plan + fresh QA run
+                        qa_result = await call("qa-engineer", f"REVIEW DESIGN:\n{plan}")
+                        qa_approved = "APPROVED" in qa_result.upper()
+                        qa_section = ""
+                        if qa_result:
+                            status = "✅ QA Approved" if qa_approved else "⚠️ QA had remaining concerns"
+                            qa_section = f"\n\n---\n\n## QA Review — Final Assessment\n\n**Status:** {status}\n\n{qa_result}"
+                        spec_for_review = plan + qa_section
                         dev_response = plan[:300].strip()
 
             if save_checkpoint:

@@ -99,39 +99,39 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
         run = await manager.enqueue(description, pr_url=pr_url, settings_override=settings_override)
         return asdict(run)
 
-    @app.get("/api/runs/{run_id}")
-    async def get_run(run_id: str) -> dict:
-        run = manager.get_run(run_id)
+    @app.get("/api/runs/{id}")
+    async def get_run(id: str) -> dict:
+        run = manager.get_run(id)
         if run is None:
             raise HTTPException(status_code=404, detail="run not found")
         return asdict(run)
 
-    @app.post("/api/runs/{run_id}/resume")
-    async def resume_run(run_id: str) -> dict:
-        run = manager.get_run(run_id)
+    @app.post("/api/runs/{id}/resume")
+    async def resume_run(id: str) -> dict:
+        run = manager.get_run(id)
         if run is None:
             raise HTTPException(status_code=404, detail="run not found")
         if run.status != RunStatus.INTERRUPTED:
             raise HTTPException(status_code=409, detail=f"run is {run.status.value}, not interrupted")
-        resumed = await manager.resume(run_id)
+        resumed = await manager.resume(id)
         if resumed is None:
             raise HTTPException(status_code=409, detail="could not resume run")
         return asdict(resumed)
 
-    @app.get("/api/runs/{run_id}/approval")
-    async def get_approval(run_id: str) -> dict:
-        if manager.get_run(run_id) is None:
+    @app.get("/api/runs/{id}/approval")
+    async def get_approval(id: str) -> dict:
+        if manager.get_run(id) is None:
             raise HTTPException(status_code=404, detail="run not found")
-        gate = manager.pending_approvals.get(run_id)
+        gate = manager.pending_approvals.get(id)
         if gate is None or not gate.is_waiting:
             return {"waiting": False, "plan": ""}
         return {"waiting": True, "plan": gate.current_plan}
 
-    @app.post("/api/runs/{run_id}/approval")
-    async def resolve_approval(run_id: str, request: Request) -> dict:
-        if manager.get_run(run_id) is None:
+    @app.post("/api/runs/{id}/approval")
+    async def resolve_approval(id: str, request: Request) -> dict:
+        if manager.get_run(id) is None:
             raise HTTPException(status_code=404, detail="run not found")
-        gate = manager.pending_approvals.get(run_id)
+        gate = manager.pending_approvals.get(id)
         if gate is None or not gate.is_waiting:
             raise HTTPException(status_code=409, detail="run is not awaiting approval")
         body = await request.json()
@@ -142,18 +142,18 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
         )
         return {"ok": True}
 
-    @app.get("/api/runs/{run_id}/events")
-    async def run_events(run_id: str) -> list[dict]:
-        if manager.get_run(run_id) is None:
+    @app.get("/api/runs/{id}/events")
+    async def run_events(id: str) -> list[dict]:
+        if manager.get_run(id) is None:
             raise HTTPException(status_code=404, detail="run not found")
-        return await manager.get_run_events(run_id)
+        return await manager.get_run_events(id)
 
-    @app.get("/api/runs/{run_id}/events/{seq}/content")
-    async def run_event_content(run_id: str, seq: int):
+    @app.get("/api/runs/{id}/events/{seq}/content")
+    async def run_event_content(id: str, seq: int):
         from fastapi.responses import PlainTextResponse
-        if manager.get_run(run_id) is None:
+        if manager.get_run(id) is None:
             raise HTTPException(status_code=404, detail="run not found")
-        content_path = await manager.get_event_content_path(run_id, seq)
+        content_path = await manager.get_event_content_path(id, seq)
         if not content_path:
             raise HTTPException(status_code=404, detail="no content for this event")
         p = Path(content_path)
@@ -161,10 +161,10 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
             raise HTTPException(status_code=404, detail="content file not found")
         return PlainTextResponse(p.read_text(encoding="utf-8"))
 
-    @app.get("/api/runs/{run_id}/agents/{role}/log")
-    async def agent_log(run_id: str, role: str):
+    @app.get("/api/runs/{id}/agents/{role}/log")
+    async def agent_log(id: str, role: str):
         from fastapi.responses import PlainTextResponse
-        run = manager.get_run(run_id)
+        run = manager.get_run(id)
         if run is None:
             raise HTTPException(status_code=404, detail="run not found")
         if not run.log_dir:
@@ -174,13 +174,13 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
             raise HTTPException(status_code=404, detail=f"no log for agent '{role}'")
         return PlainTextResponse(log_path.read_text(encoding="utf-8"))
 
-    @app.get("/api/runs/{run_id}/state")
-    async def get_run_state(run_id: str) -> dict:
-        if manager.get_run(run_id) is None:
+    @app.get("/api/runs/{id}/state")
+    async def get_run_state(id: str) -> dict:
+        if manager.get_run(id) is None:
             raise HTTPException(status_code=404, detail="run not found")
-        state = await manager.get_run_state(run_id)
+        state = await manager.get_run_state(id)
         return state or {
-            "run_id": run_id,
+            "id": id,
             "current_stage": None,
             "current_cycle": None,
             "last_agent": None,

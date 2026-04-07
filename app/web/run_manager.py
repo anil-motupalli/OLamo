@@ -95,8 +95,8 @@ class RunManager:
         )
         self._runs[run.id] = run
         await self._db.upsert_run(run)
-        await self._db.insert_event(run.id, {"type": "run_queued", "run_id": run.id, "description": description})
-        await self._broadcaster.broadcast({"type": "run_queued", "run_id": run.id, "description": description})
+        await self._db.insert_event(run.id, {"type": "run_queued", "id": run.id, "description": description})
+        await self._broadcaster.broadcast({"type": "run_queued", "id": run.id, "description": description})
         self._spawn(run)
         return run
 
@@ -157,7 +157,7 @@ class RunManager:
         await self._db.upsert_run_state(run.id, current_stage="running")
         await self._store.lock()
 
-        started_evt = {"type": "run_started", "run_id": run.id}
+        started_evt = {"type": "run_started", "id": run.id}
         await self._broadcaster.broadcast(started_evt)
         await self._db.insert_event(run.id, started_evt)
 
@@ -212,7 +212,7 @@ class RunManager:
             # Insert the event FIRST so we have the seq, then broadcast with seq included
             evt: dict = {
                 "type": "awaiting_approval",
-                "run_id": run.id,
+                "id": run.id,
                 "specSummary": spec_summary,
                 "developerResponse": developer_response[:300] if developer_response else "",
             }
@@ -227,7 +227,7 @@ class RunManager:
             result = await gate.wait(spec)
             # Emit design_approval_received so frontend can update the gate node state
             if result.get("approved"):
-                approval_evt = {"type": "design_approval_received", "run_id": run.id}
+                approval_evt = {"type": "design_approval_received", "id": run.id}
                 await self._db.insert_event(run.id, approval_evt)
                 await self._broadcaster.broadcast(approval_evt)
             return result
@@ -250,7 +250,7 @@ class RunManager:
             run.completed_at = datetime.now(timezone.utc).isoformat()
             await self._db.upsert_run(run)
             await self._db.upsert_run_state(run.id, current_stage="completed")
-            completed_evt = {"type": "run_completed", "run_id": run.id, "status": "completed", "result": result[:500]}
+            completed_evt = {"type": "run_completed", "id": run.id, "status": "completed", "result": result[:500]}
             await self._broadcaster.broadcast(completed_evt)
             await self._db.insert_event(run.id, completed_evt)
         except Exception as e:
@@ -259,7 +259,7 @@ class RunManager:
             run.error = str(e)
             await self._db.upsert_run(run)
             await self._db.upsert_run_state(run.id, current_stage="failed")
-            failed_evt = {"type": "run_completed", "run_id": run.id, "status": "failed", "error": str(e)}
+            failed_evt = {"type": "run_completed", "id": run.id, "status": "failed", "error": str(e)}
             await self._broadcaster.broadcast(failed_evt)
             await self._db.insert_event(run.id, failed_evt)
         finally:

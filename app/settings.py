@@ -24,7 +24,7 @@ class SettingsStore:
         else:
             self._SETTINGS_FILE = type(self)._SETTINGS_FILE.resolve()
         self._settings = self._load()
-        self._locked = False
+        self._active_runs = 0   # ref-count: lock() increments, unlock() decrements
         self._pending: AppSettings | None = None
         self._lock = asyncio.Lock()
 
@@ -85,23 +85,23 @@ class SettingsStore:
 
     @property
     def is_locked(self) -> bool:
-        return self._locked
+        return self._active_runs > 0
 
     async def lock(self) -> None:
         async with self._lock:
-            self._locked = True
+            self._active_runs += 1
 
     async def unlock(self) -> None:
         async with self._lock:
-            self._locked = False
-            if self._pending is not None:
+            self._active_runs -= 1
+            if self._active_runs == 0 and self._pending is not None:
                 self._settings = self._pending
                 self._pending = None
                 self._save()
 
     async def try_update(self, new_settings: AppSettings) -> bool:
         async with self._lock:
-            if self._locked:
+            if self._active_runs > 0:
                 self._pending = new_settings
                 return False
             self._settings = new_settings

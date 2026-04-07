@@ -95,6 +95,31 @@ class TestSettingsStore:
         assert store3.settings.pm_model == "pending-model"
 
     @pytest.mark.asyncio
+    async def test_is_locked_while_any_run_active(self):
+        """is_locked stays True until every lock() is matched by an unlock()."""
+        store = SettingsStore()
+        await store.lock()
+        await store.lock()
+        assert store.is_locked
+        await store.unlock()
+        assert store.is_locked          # still one active run
+        await store.unlock()
+        assert not store.is_locked      # now truly idle
+
+    @pytest.mark.asyncio
+    async def test_pending_not_applied_until_all_unlocked(self):
+        """Pending settings must not be applied while any run still holds a lock."""
+        store = SettingsStore()
+        await store.lock()   # run A
+        await store.lock()   # run B
+        await store.try_update(AppSettings(pm_model="concurrent-update"))
+        await store.unlock()  # run A finishes
+        # run B still active — settings should NOT have been applied yet
+        assert store.settings.pm_model != "concurrent-update"
+        await store.unlock()  # run B finishes
+        assert store.settings.pm_model == "concurrent-update"
+
+    @pytest.mark.asyncio
     async def test_loads_jsonc_with_comments(self, tmp_path):
         jsonc_file = tmp_path / "test.jsonc"
         jsonc_file.write_text(

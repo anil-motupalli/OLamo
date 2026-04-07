@@ -539,12 +539,12 @@ class TestOrchestrationEngineRouting:
         """Agents configured for copilot engine go through CopilotEngine."""
         # Canned responses per role to advance the pipeline
         _CANNED = {
-            "lead-developer": "APPROVED",
+            "lead-developer": '{"decision": "Approved", "findings": []}',
             "developer": "implemented",
-            "code-reviewer": "APPROVED",
-            "qa-engineer": "APPROVED",
-            "build-agent": "BUILD SUCCESS",
-            "repo-manager": "https://github.com/mock/repo/pull/1\n\nNO ACTIONABLE COMMENTS",
+            "code-reviewer": '{"decision": "Approved", "findings": []}',
+            "qa-engineer": '{"decision": "Approved", "findings": []}',
+            "build-agent": '{"status": "BUILD SUCCESS", "output": "all tests passed", "build_errors": [], "test_failures": []}',
+            "repo-manager": '{"mode": "commit_pr", "pr_url": "https://github.com/mock/repo/pull/1", "pr_number": 1, "diff": "diff --git a/f b/f"}\n{"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []}',
         }
 
         def _make_session(content):

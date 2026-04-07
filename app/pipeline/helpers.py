@@ -124,6 +124,95 @@ def _normalise_review(data: dict) -> dict[str, Any]:
     return {"decision": decision, "findings": findings}
 
 
+_BUILD_SUCCESS_STATUSES = {"BUILD SUCCESS"}
+_BUILD_FAILURE_STATUSES = {"BUILD FAILURE", "TEST FAILURE"}
+
+
+def parse_build_output(text: str) -> dict:
+    """Parse build-agent structured JSON output.
+
+    Returns a dict with at least:
+      ``{"status": "BUILD SUCCESS"|"BUILD FAILURE"|"TEST FAILURE",
+         "output": str, "build_errors": list, "test_failures": list}``
+
+    Falls back to text heuristics so old-style plain-text responses still work.
+    """
+    raw = text.strip()
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            data = json.loads(raw[start:end + 1])
+            if "status" in data:
+                data.setdefault("output", raw)
+                data.setdefault("build_errors", [])
+                data.setdefault("test_failures", [])
+                # back-compat: fold old "errors" string into build_errors list
+                if "errors" in data and isinstance(data["errors"], str) and data["errors"]:
+                    if not data["build_errors"]:
+                        data["build_errors"] = [{"file": None, "line": 0, "message": data["errors"]}]
+                return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+    upper = raw.upper()
+    if "SUCCESS" in upper:
+        return {"status": "BUILD SUCCESS", "output": raw, "build_errors": [], "test_failures": []}
+    return {"status": "BUILD FAILURE", "output": raw,
+            "build_errors": [{"file": None, "line": 0, "message": raw}], "test_failures": []}
+
+
+def _build_failed(parsed: dict) -> bool:
+    """Return True when a parse_build_output result represents a failure."""
+    return parsed.get("status", "") in _BUILD_FAILURE_STATUSES
+
+
+def _build_failure_summary(parsed: dict) -> str:
+    """Return a developer-friendly summary of all build/test errors."""
+    import json as _json
+    parts: list[str] = [f"Status: {parsed.get('status', 'BUILD FAILURE')}"]
+    if parsed.get("build_errors"):
+        parts.append("Build errors:\n" + _json.dumps(parsed["build_errors"], indent=2))
+    if parsed.get("test_failures"):
+        parts.append("Test failures:\n" + _json.dumps(parsed["test_failures"], indent=2))
+    if not parsed.get("build_errors") and not parsed.get("test_failures"):
+        parts.append(parsed.get("output", "")[:2000])
+    return "\n\n".join(parts)
+
+
+def parse_repo_output(text: str) -> dict:
+    """Parse repo-manager structured JSON output.
+
+    Returns a dict containing at least a ``mode`` key where known, plus
+    mode-specific fields (``pr_url``, ``diff``, ``status``, ``comments``, etc.).
+
+    Falls back to text heuristics so old-style plain-text responses still work.
+    """
+    raw = text.strip()
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            data = json.loads(raw[start:end + 1])
+            if "mode" in data or "pr_url" in data or ("status" in data and "diff" in data):
+                data.setdefault("raw", raw)
+                return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+    upper = raw.upper()
+    result: dict = {"raw": raw}
+    if "CHECKS PASSING" in upper:
+        result.update({"mode": "poll_ci", "status": "CHECKS PASSING", "details": ""})
+    elif "CHECKS FAILING" in upper:
+        result.update({"mode": "poll_ci", "status": "CHECKS FAILING", "details": raw})
+    elif "NO ACTIONABLE COMMENTS" in upper:
+        result.update({"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []})
+    elif "ACTIONABLE COMMENTS" in upper:
+        result.update({"mode": "poll_comments", "status": raw, "count": 0, "comments": []})
+    else:
+        result.update({"diff": raw})
+    return result
+
+
 def parse_finding_responses(text: str) -> tuple[str, list[dict]]:
     """Split agent output on FINDING_RESPONSES_SEP and parse the JSON responses.
 

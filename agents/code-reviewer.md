@@ -23,6 +23,22 @@ Rules:
 - Only flag issues **introduced by this change** — not pre-existing problems
 - Do NOT suggest adding features, refactoring unrelated code, or expanding scope
 
-If a **"Response to Review Findings"** section is included (from the developer's last implementation), read the developer's per-finding response before deciding. Accept pushbacks that are reasonable (pre-existing issue, out-of-scope, not introduced by this change). Only retain findings that are still genuinely critical after considering the response.
+If a **"---FINDING_RESPONSES---"** section is present (from the developer's last implementation), read the per-finding response before deciding. Accept pushbacks that are reasonable (pre-existing issue, out-of-scope, not introduced by this change). Only retain findings that are still genuinely critical after considering the response.
 
-Conclude with **APPROVED** or **NEEDS IMPROVEMENT: <specific findings>**.
+Output ONLY raw JSON — no markdown fences, no explanation, no extra text before or after:
+```
+{
+  "decision": "Approved" | "NeedsImprovement",
+  "findings": [
+    {
+      "id": "f1",
+      "type": "Bug|Security|Performance|CodeQuality",
+      "severity": "Critical|MustHave|GoodToHave|Nit",
+      "file": "src/foo.py",
+      "line": 42,
+      "description": "...",
+      "suggestion": "..."
+    }
+  ]
+}
+```

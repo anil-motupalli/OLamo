@@ -18,7 +18,7 @@ from ..models import (
 )
 from ..agents import AGENT_CONFIGS
 from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
-from .helpers import _reviewer_prompt, _extract_comment_ids, parse_review_json, parse_finding_responses, FINDING_RESPONSES_SEP
+from .helpers import _reviewer_prompt, _extract_comment_ids, parse_review_json, parse_finding_responses, parse_build_output, parse_repo_output, _build_failed, _build_failure_summary, FINDING_RESPONSES_SEP
 
 
 def _write_agent_log(log_dir: str, role: str, prompt: str, lines: list[str], result: str, elapsed_ms: int) -> None:
@@ -289,21 +289,22 @@ async def run_pipeline_orchestrated(
 
                 # Build loop
                 build_ok = False
-                build_output = ""
+                build_parsed: dict = {}
                 for build_cycle in range(settings.max_build_cycles):
-                    build_output = await call("build-agent", "Build and test the project.")
-                    if "SUCCESS" in build_output.upper():
+                    raw_build = await call("build-agent", "Build and test the project.")
+                    build_parsed = parse_build_output(raw_build)
+                    if not _build_failed(build_parsed):
                         build_ok = True
                         break
                     if build_cycle < settings.max_build_cycles - 1:
-                        dev_result = await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                        dev_result = await call("developer", f"FIX BUILD FAILURE:\n{_build_failure_summary(build_parsed)}")
                         dev_summary, dev_responses = parse_finding_responses(dev_result)
 
                 if not build_ok:
                     impl_findings = [{"id": "build-fail", "type": "Bug", "severity": "Critical",
                                       "file": None, "line": 0,
                                       "description": f"Build failed after {settings.max_build_cycles} retries",
-                                      "suggestion": build_output[:500]}]
+                                      "suggestion": _build_failure_summary(build_parsed)[:500]}]
                     break
 
                 # Code review — pass developer's per-finding JSON responses so reviewers can weigh pushbacks
@@ -365,13 +366,15 @@ async def run_pipeline_orchestrated(
 
             # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
             await stage("Stage 3: Commit & PR", cycle=0)
-            pr_result = await call(
+            raw_pr = await call(
                 "repo-manager",
                 f"Commit all changes and create a Pull Request.\n"
                 f"Branch: feature/{re.sub(r'[^a-z0-9]+', '-', task[:50].lower()).strip('-')}\n"
                 f"Title: {task[:72]}\nDescription: Implemented via OLamo orchestrated pipeline.",
             )
-            last_diff = pr_result
+            pr_parsed = parse_repo_output(raw_pr)
+            pr_result = pr_parsed.get("pr_url", raw_pr)
+            last_diff = pr_parsed.get("diff", raw_pr)
 
             if save_checkpoint:
                 await save_checkpoint({
@@ -390,18 +393,21 @@ async def run_pipeline_orchestrated(
         # ── Stage 3b: CI Check Polling ────────────────────────────────────────────
         for ci_cycle in range(settings.max_pr_cycles):
             await stage(f"CI check cycle {ci_cycle + 1}/{settings.max_pr_cycles}", cycle=ci_cycle + 1)
-            check_result = await call("repo-manager", "POLL CI CHECKS")
-            if "CHECKS PASSING" in check_result.upper():
+            raw_ci = await call("repo-manager", "POLL CI CHECKS")
+            ci_parsed = parse_repo_output(raw_ci)
+            if ci_parsed.get("status", "").upper() == "CHECKS PASSING":
                 break
 
-            await call("developer", f"Fix the following CI check failures:\n{check_result}")
+            await call("developer", f"Fix the following CI check failures:\n{ci_parsed.get('details', raw_ci)}")
 
-            build_output = await call("build-agent", "Build and test the project.")
-            if "FAILURE" in build_output.upper():
-                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+            raw_build = await call("build-agent", "Build and test the project.")
+            build_parsed = parse_build_output(raw_build)
+            if _build_failed(build_parsed):
+                await call("developer", f"FIX BUILD FAILURE:\n{_build_failure_summary(build_parsed)}")
                 await call("build-agent", "Build and test the project.")
 
-            last_diff = await call("repo-manager", "PUSH CHANGES")
+            raw_push = await call("repo-manager", "PUSH CHANGES")
+            last_diff = parse_repo_output(raw_push).get("diff", raw_push)
 
         # ── Stage 4: PR Poll Loop ─────────────────────────────────────────────────
         await stage("Stage 4: PR Poll", cycle=0)
@@ -410,21 +416,26 @@ async def run_pipeline_orchestrated(
             await stage(f"PR cycle {pr_cycle + 1}/{settings.max_pr_cycles}", cycle=pr_cycle + 1)
 
             exclude = f" Exclude these IDs: {', '.join(addressed_ids)}" if addressed_ids else ""
-            poll_result = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
+            raw_poll = await call("repo-manager", f"POLL PR COMMENTS.{exclude}")
+            poll_parsed = parse_repo_output(raw_poll)
 
-            if "NO ACTIONABLE COMMENTS" in poll_result.upper():
+            if poll_parsed.get("status", "").upper() == "NO ACTIONABLE COMMENTS":
                 break
 
-            new_ids = _extract_comment_ids(poll_result)
+            comments = poll_parsed.get("comments", [])
+            new_ids = [c["id"] for c in comments if c.get("id")] or _extract_comment_ids(raw_poll)
             if new_ids:
                 addressed_ids.extend(new_ids)
                 await call("repo-manager", f"MARK COMMENTS ADDRESSED: {', '.join(new_ids)}")
 
-            await call("developer", f"Address the following PR review comments:\n{poll_result}")
+            import json as _json3
+            comment_text = _json3.dumps(comments) if comments else raw_poll
+            await call("developer", f"Address the following PR review comments:\n{comment_text}")
 
-            build_output = await call("build-agent", "Build and test the project.")
-            if "FAILURE" in build_output.upper():
-                await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+            raw_build = await call("build-agent", "Build and test the project.")
+            build_parsed = parse_build_output(raw_build)
+            if _build_failed(build_parsed):
+                await call("developer", f"FIX BUILD FAILURE:\n{_build_failure_summary(build_parsed)}")
                 await call("build-agent", "Build and test the project.")
 
             # One reviewer pass after PR comment fix
@@ -438,14 +449,16 @@ async def run_pipeline_orchestrated(
                 if parse_review_json(raw).get("decision") == "NeedsImprovement"
             ]
             if pr_review_findings:
-                import json as _json3
-                await call("developer", f"Address review findings before pushing:\n{_json3.dumps(pr_review_findings)}")
-                build_output = await call("build-agent", "Build and test the project.")
-                if "FAILURE" in build_output.upper():
-                    await call("developer", f"FIX BUILD FAILURE:\n{build_output}")
+                import json as _json4
+                await call("developer", f"Address review findings before pushing:\n{_json4.dumps(pr_review_findings)}")
+                raw_build = await call("build-agent", "Build and test the project.")
+                build_parsed = parse_build_output(raw_build)
+                if _build_failed(build_parsed):
+                    await call("developer", f"FIX BUILD FAILURE:\n{_build_failure_summary(build_parsed)}")
                     await call("build-agent", "Build and test the project.")
 
-            last_diff = await call("repo-manager", "PUSH CHANGES")
+            raw_push = await call("repo-manager", "PUSH CHANGES")
+            last_diff = parse_repo_output(raw_push).get("diff", raw_push)
 
             if save_checkpoint:
                 await save_checkpoint({

@@ -14,14 +14,20 @@ def resolve_secret(value: str) -> str:
 
     Supported prefixes:
 
-    - ``env:VAR_NAME``          — Read from the named environment variable.
-      Store the key with ``export OLAMO_ZAI_KEY=sk-...`` (shell rc / CI secret).
+    - ``env:VAR_NAME``            — Read from the named environment variable.
+      The recommended way to set these is in a ``.env`` file in the project
+      root (automatically loaded at startup, gitignored by default)::
+
+          OLAMO_ZAI_API_KEY=sk-...
+
+      then set ``api_key: "env:OLAMO_ZAI_API_KEY"`` in your settings file.
+      Alternatively, export from your shell rc or set as a CI secret.
 
     - ``keyring:service/account`` — Read from the OS keychain via the
       ``keyring`` library (macOS Keychain, Windows Credential Manager, Linux
       Secret Service). Install with ``pip install keyring`` and store with
       ``python -c "import keyring; keyring.set_password('olamo', 'zai_key', 'sk-...')"``
-      then set ``api_key: keyring:olamo/zai_key`` in your settings file.
+      then set ``api_key: "keyring:olamo/zai_key"`` in your settings file.
 
     Any other value is returned as-is (including empty strings and plain keys
     set directly — though the latter is discouraged for production use).

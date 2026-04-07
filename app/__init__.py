@@ -1,5 +1,19 @@
 """OLamo app package — exports all public symbols for backward compatibility."""
 
+# Load .env file (if present) into os.environ before anything else so that
+# env:VAR_NAME references in settings resolve correctly without requiring
+# shell-profile edits.  python-dotenv is a hard dependency; if somehow missing,
+# a clear warning is emitted rather than silently failing.
+import logging as _logging
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=False)   # don't override vars the shell already set
+except ImportError:  # pragma: no cover
+    _logging.getLogger(__name__).warning(
+        "python-dotenv is not installed; .env file will not be loaded. "
+        "Run: pip install python-dotenv"
+    )
+
 # Constants
 from .constants import (
     OPUS_MODEL,

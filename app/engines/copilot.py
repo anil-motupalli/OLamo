@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Awaitable, Callable
 
@@ -15,6 +16,10 @@ except ImportError:
 
 from .base import AgentEngine
 from ..models import AppSettings, ModelConfig
+
+# Default timeout: 30 minutes — enough for complex developer/build tasks.
+# Override per-agent via model_config.extra_params["timeout_seconds"].
+_DEFAULT_TIMEOUT_SECONDS = 1800
 
 
 class CopilotEngine:
@@ -53,6 +58,7 @@ class CopilotEngine:
         model_config: ModelConfig,
         mcp_servers: dict[str, dict],
         on_event: Callable[[dict], Awaitable[None]],
+        **_kwargs,
     ) -> str:
         # Build keyword args for create_session — all keyword-only, no positional dict.
         kwargs: dict = {
@@ -77,12 +83,56 @@ class CopilotEngine:
         except Exception as e:
             raise RuntimeError(f"CopilotEngine: failed to create session for '{role}': {e}") from e
 
+        # Event-driven approach matching OLaCo's TaskCompletionSource pattern.
+        # SDK dispatches events from a background JSON-RPC thread, so we use
+        # call_soon_threadsafe / run_coroutine_threadsafe to bridge to asyncio.
+        loop = asyncio.get_running_loop()
+        idle_event = asyncio.Event()
+        error_exc: Exception | None = None
+        message_parts: list[str] = []
+
+        def _handler(event) -> None:
+            nonlocal error_exc
+            etype = event.type
+            if hasattr(etype, "value"):
+                etype = etype.value
+
+            if etype == "assistant.message":
+                content = str(getattr(getattr(event, "data", None), "content", "") or "")
+                if content:
+                    message_parts.append(content)
+                    asyncio.run_coroutine_threadsafe(
+                        on_event({"type": "agent_message", "role": role, "text": content}),
+                        loop,
+                    )
+            elif etype == "tool.execution_start":
+                tool_name = str(getattr(getattr(event, "data", None), "tool_name", "") or "")
+                asyncio.run_coroutine_threadsafe(
+                    on_event({"type": "agent_tool_call", "role": role, "tool_name": tool_name, "args_preview": ""}),
+                    loop,
+                )
+            elif etype == "session.idle":
+                loop.call_soon_threadsafe(idle_event.set)
+            elif etype == "session.error":
+                msg = str(getattr(getattr(event, "data", None), "message", "Unknown session error") or "")
+                error_exc = RuntimeError(f"CopilotEngine session error for '{role}': {msg}")
+                loop.call_soon_threadsafe(idle_event.set)
+
+        timeout = float((model_config.extra_params or {}).get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS))
+        unsubscribe = session.on(_handler)
         try:
-            # send_and_wait blocks until session.idle; returns final assistant message event
-            event = await session.send_and_wait(prompt, timeout=600.0)
-            result = str(getattr(getattr(event, "data", None), "content", "")) if event else ""
+            await session.send(prompt)
+            try:
+                await asyncio.wait_for(idle_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"CopilotEngine: agent '{role}' timed out after {timeout:.0f}s. "
+                    f"Increase timeout_seconds in model_config.extra_params if needed."
+                )
+            if error_exc:
+                raise error_exc
         finally:
+            unsubscribe()
             await session.disconnect()
 
-        await on_event({"type": "agent_message", "role": role, "text": result[:300]})
-        return result
+        return "\n".join(message_parts)

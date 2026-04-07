@@ -46,6 +46,7 @@ async def run_pipeline_orchestrated(
     checkpoint: dict | None = None,
     save_checkpoint: Callable[[dict], Awaitable[None]] | None = None,
     log_dir: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Orchestration driven entirely by Python — no PM LLM, deterministic loops."""
 
@@ -133,6 +134,7 @@ async def run_pipeline_orchestrated(
                 model_config=model_config,
                 mcp_servers=mcp_servers,
                 on_event=_forwarding_on_event,
+                run_id=run_id,
             )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             summary = result.strip() if result else ""
@@ -174,6 +176,24 @@ async def run_pipeline_orchestrated(
                     qa_approved = True
                     break
                 if i < settings.max_design_cycles - 1:
+                    # Lead developer evaluates QA findings — may push back on out-of-scope items
+                    ld_eval = await call(
+                        "lead-developer",
+                        f"EVALUATE QA FEEDBACK:\n\nTask:\n{task}\n\nPlan:\n{plan}\n\nQA Findings:\n{qa_result}",
+                    )
+                    if "PUSHBACK" in ld_eval.upper():
+                        # QA evaluates the pushback — withdraws invalid findings or maintains valid ones
+                        qa_final = await call(
+                            "qa-engineer",
+                            f"EVALUATE PUSHBACK:\n\nTask:\n{task}\n\nOriginal Findings:\n{qa_result}\n\nLead Developer Response:\n{ld_eval}",
+                        )
+                        if "MAINTAIN" not in qa_final.upper():
+                            # All findings withdrawn — design is approved
+                            qa_result = qa_final
+                            qa_approved = True
+                            break
+                        qa_result = qa_final  # refined to only maintained findings
+                    # Refine plan based on accepted / maintained findings
                     plan = await call(
                         "lead-developer",
                         f"REFINE the following plan based on QA findings.\n\n"
@@ -274,6 +294,27 @@ async def run_pipeline_orchestrated(
                         reviewer_results[role] = result
                         if "NEEDS IMPROVEMENT" not in result.upper():
                             already_approved.add(role)
+
+                # Debate pass: developer may push back on reviewer findings
+                for rev_role in list(reviewer_results):
+                    rev_result = reviewer_results[rev_role]
+                    if "NEEDS IMPROVEMENT" not in rev_result.upper():
+                        continue
+                    dev_eval = await call(
+                        "developer",
+                        f"EVALUATE REVIEW FINDINGS:\n\nTask / Plan:\n{plan}\n\nFindings from {rev_role}:\n{rev_result}",
+                    )
+                    if "PUSHBACK" in dev_eval.upper():
+                        rev_response = await call(
+                            rev_role,
+                            f"EVALUATE PUSHBACK:\n\nTask / Plan:\n{plan}\n\nOriginal Findings:\n{rev_result}\n\nDeveloper Response:\n{dev_eval}",
+                        )
+                        if "MAINTAIN" not in rev_response.upper():
+                            # All findings withdrawn — treat this reviewer as approved
+                            already_approved.add(rev_role)
+                            reviewer_results[rev_role] = rev_response
+                        else:
+                            reviewer_results[rev_role] = rev_response
 
                 combined = "\n".join(reviewer_results.values())
                 has_critical = any(kw in combined.upper() for kw in ("CRITICAL", "MUST HAVE", "MUST-HAVE"))

@@ -290,7 +290,7 @@ async def run_pipeline_orchestrated(
                                       "file": None, "line": 0,
                                       "description": f"Build failed after {settings.max_build_cycles} retries",
                                       "suggestion": _build_failure_summary(build_parsed)[:500]}]
-                    continue  # don't break — let the cycle log and checkpoint before the loop ends
+                    break  # exit impl loop; guard below will raise a build-failure error
 
                 # Code review — pass developer's per-finding JSON responses so reviewers can weigh pushbacks
                 diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
@@ -359,6 +359,11 @@ async def run_pipeline_orchestrated(
                     break
 
             # Guard: only proceed to commit if every reviewer has approved.
+            if any(f.get("id") == "build-fail" for f in impl_findings):
+                raise RuntimeError(
+                    f"Build/test failures persisted after {settings.max_build_cycles} retries: "
+                    f"{impl_findings[0].get('suggestion', '')[:300]}"
+                )
             unapproved = set(_ALL_REVIEWERS) - already_approved
             if unapproved:
                 raise RuntimeError(

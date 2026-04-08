@@ -146,3 +146,85 @@ class TestSettingsStore:
         parsed = json.loads(result)
         assert parsed["note"] == "use // for comments"
         assert parsed["val"] == 1
+
+
+class TestApiKeyRedirect:
+    """Plain API keys submitted via the UI must be saved to .env, not to the settings file."""
+
+    @pytest.fixture()
+    def store(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(SettingsStore, "_SETTINGS_FILE", tmp_path / "settings.json")
+        return SettingsStore(), tmp_path
+
+    def _make_settings_with_key(self, api_key: str) -> AppSettings:
+        from app.models import AgentEngineConfig, ModelConfig
+        return AppSettings(agent_configs={
+            "lead-developer": AgentEngineConfig(
+                model_config=ModelConfig(api_key=api_key)
+            )
+        })
+
+    @pytest.mark.asyncio
+    async def test_plain_key_is_written_to_dotenv_not_settings_file(self, store):
+        s, tmp_path = store
+        await s.try_update(self._make_settings_with_key("sk-plain-secret"))
+
+        settings_data = json.loads((tmp_path / "settings.json").read_text())
+        saved_key = settings_data["agent_configs"]["lead-developer"]["model_config"]["api_key"]
+        assert saved_key.startswith("env:"), f"Expected env: ref, got: {saved_key!r}"
+        assert "sk-plain-secret" not in (tmp_path / "settings.json").read_text()
+
+    @pytest.mark.asyncio
+    async def test_plain_key_value_appears_in_dotenv_file(self, store):
+        s, tmp_path = store
+        await s.try_update(self._make_settings_with_key("sk-plain-secret"))
+
+        env_file = tmp_path / ".env"
+        assert env_file.exists(), ".env file was not created"
+        assert "sk-plain-secret" in env_file.read_text()
+
+    @pytest.mark.asyncio
+    async def test_existing_env_ref_is_reused_on_update(self, store):
+        """When the current api_key is env:MY_VAR, a new plain key updates MY_VAR in .env."""
+        s, tmp_path = store
+        # Load with an existing env: reference
+        from app.models import AgentEngineConfig, ModelConfig
+        initial = AppSettings(agent_configs={
+            "lead-developer": AgentEngineConfig(
+                model_config=ModelConfig(api_key="env:MY_CUSTOM_VAR")
+            )
+        })
+        await s.try_update(initial)
+
+        # Now update with a plain key — should reuse MY_CUSTOM_VAR
+        await s.try_update(self._make_settings_with_key("sk-new-value"))
+
+        settings_data = json.loads((tmp_path / "settings.json").read_text())
+        saved_key = settings_data["agent_configs"]["lead-developer"]["model_config"]["api_key"]
+        assert saved_key == "env:MY_CUSTOM_VAR"
+        assert "MY_CUSTOM_VAR" in (tmp_path / ".env").read_text()
+        assert "sk-new-value" in (tmp_path / ".env").read_text()
+
+    @pytest.mark.asyncio
+    async def test_env_ref_passthrough_unchanged(self, store):
+        """An api_key already starting with env: is written as-is to the settings file."""
+        s, tmp_path = store
+        await s.try_update(self._make_settings_with_key("env:SOME_VAR"))
+
+        settings_data = json.loads((tmp_path / "settings.json").read_text())
+        saved_key = settings_data["agent_configs"]["lead-developer"]["model_config"]["api_key"]
+        assert saved_key == "env:SOME_VAR"
+
+    @pytest.mark.asyncio
+    async def test_plain_key_sets_os_environ_immediately(self, store, monkeypatch):
+        """After saving a plain key the env var is available in os.environ right away."""
+        import os
+        s, tmp_path = store
+        await s.try_update(self._make_settings_with_key("sk-live-key"))
+
+        # Find what var name was assigned
+        settings_data = json.loads((tmp_path / "settings.json").read_text())
+        ref = settings_data["agent_configs"]["lead-developer"]["model_config"]["api_key"]
+        var_name = ref[4:]  # strip "env:"
+        assert os.environ.get(var_name) == "sk-live-key"
+

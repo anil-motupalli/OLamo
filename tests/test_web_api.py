@@ -504,12 +504,40 @@ class TestOrchestrationEngineRouting:
     async def test_claude_engine_agents_invoke_query(self):
         """Agents configured for claude engine go through ClaudeEngine (query())."""
         from claude_agent_sdk import ResultMessage
+
+        _CANNED = {
+            "build":         '{"status": "BUILD SUCCESS", "output": "ok", "build_errors": [], "test_failures": []}',
+            "review":        '{"decision": "Approved", "findings": []}',
+            "commit_pr":     '{"mode": "commit_pr", "pr_url": "https://github.com/mock/repo/pull/1", "pr_number": 1, "diff": "diff"}',
+            "poll_ci":        '{"mode": "poll_ci", "status": "CHECKS PASSING", "details": ""}',
+            "poll_comments":  '{"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []}',
+            "push":           '{"mode": "push", "diff": "diff"}',
+            "mark_comments":  "MARKED",
+            "default":        "done",
+        }
         query_calls = []
 
         async def fake_query(**kwargs):
             query_calls.append(kwargs)
+            p = kwargs.get("prompt", "").upper()
+            if "BUILD AND TEST" in p:
+                result = _CANNED["build"]
+            elif "COMMIT ALL CHANGES" in p:
+                result = _CANNED["commit_pr"]
+            elif "POLL CI" in p:
+                result = _CANNED["poll_ci"]
+            elif "POLL PR" in p:
+                result = _CANNED["poll_comments"]
+            elif "PUSH CHANGES" in p:
+                result = _CANNED["push"]
+            elif "MARK COMMENTS" in p:
+                result = _CANNED["mark_comments"]
+            elif "REVIEW" in p:
+                result = _CANNED["review"]
+            else:
+                result = _CANNED["default"]
             mock = MagicMock(spec=ResultMessage)
-            mock.result = "APPROVED"
+            mock.result = result
             yield mock
 
         settings = AppSettings(
@@ -537,20 +565,34 @@ class TestOrchestrationEngineRouting:
     @pytest.mark.asyncio
     async def test_copilot_engine_agents_invoke_copilot_client(self):
         """Agents configured for copilot engine go through CopilotEngine."""
-        # Canned responses per role to advance the pipeline
+        # Canned responses per role to advance the pipeline.
+        # For repo-manager, a list of responses cycled per send() call so each
+        # pipeline stage gets a single valid JSON object.
+        _REPO_RESPONSES = [
+            '{"mode": "commit_pr", "pr_url": "https://github.com/mock/repo/pull/1", "pr_number": 1, "diff": "diff --git a/f b/f"}',
+            '{"mode": "poll_ci", "status": "CHECKS PASSING", "details": ""}',
+            '{"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []}',
+        ]
         _CANNED = {
             "lead-developer": '{"decision": "Approved", "findings": []}',
             "developer": "implemented",
             "code-reviewer": '{"decision": "Approved", "findings": []}',
             "qa-engineer": '{"decision": "Approved", "findings": []}',
             "build-agent": '{"status": "BUILD SUCCESS", "output": "all tests passed", "build_errors": [], "test_failures": []}',
-            "repo-manager": '{"mode": "commit_pr", "pr_url": "https://github.com/mock/repo/pull/1", "pr_number": 1, "diff": "diff --git a/f b/f"}\n{"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []}',
+            "repo-manager": _REPO_RESPONSES,
         }
 
-        def _make_session(content):
+        def _make_session(content_or_list):
+            """Build a mock Copilot SDK session.
+
+            *content_or_list*: either a fixed string, or a list of strings
+            that will be returned in order for each ``on()`` call (repo-manager
+            makes multiple calls through one cached session).
+            """
             session = MagicMock()
             session.disconnect = AsyncMock()
             session.send = AsyncMock()
+            call_idx = [0]
 
             idle_et = MagicMock()
             idle_et.value = "session.idle"
@@ -558,14 +600,21 @@ class TestOrchestrationEngineRouting:
             idle_evt.type = idle_et
             idle_evt.data = MagicMock()
 
-            msg_et = MagicMock()
-            msg_et.value = "assistant.message"
-            msg_evt = MagicMock()
-            msg_evt.type = msg_et
-            msg_evt.data = MagicMock()
-            msg_evt.data.content = content
-
             def fake_on(handler):
+                if isinstance(content_or_list, list):
+                    idx = min(call_idx[0], len(content_or_list) - 1)
+                    content = content_or_list[idx]
+                    call_idx[0] += 1
+                else:
+                    content = content_or_list
+
+                msg_et = MagicMock()
+                msg_et.value = "assistant.message"
+                msg_evt = MagicMock()
+                msg_evt.type = msg_et
+                msg_evt.data = MagicMock()
+                msg_evt.data.content = content
+
                 handler(msg_evt)
                 handler(idle_evt)
                 return lambda: None
@@ -611,8 +660,9 @@ class TestOrchestrationEngineRouting:
                 task="add hello world",
                 settings=settings,
                 on_event=on_event,
+                run_id="test-run",
             )
 
         assert mock_client.start.call_count == 1
         assert mock_client.stop.call_count == 1
-        assert call_count >= 8
+        assert call_count >= 5

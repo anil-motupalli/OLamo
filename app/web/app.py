@@ -9,9 +9,8 @@ from ..models import (
     AppSettings,
     RunStatus,
     _settings_from_dict,
-    _COPILOT_DEFAULTS,
-    _CLAUDE_TIER,
     get_default_engine_config,
+    _resolve_default_model,
 )
 from ..agents import build_agents
 from ..settings import SettingsStore
@@ -197,10 +196,8 @@ def create_app(settings_file: Path | None = None, db_path: str | None = None):  
             # Resolve the effective model: explicit config > engine smart default
             if cfg.model_config.model:
                 model = cfg.model_config.model
-            elif cfg.engine == "copilot":
-                model = _COPILOT_DEFAULTS.get(role, "")
             else:
-                model = getattr(s, _CLAUDE_TIER.get(role, "sonnet_model"), "")
+                model = _resolve_default_model(role, cfg.engine, s)
             agent_list.append({
                 "role": role,
                 "model": model,

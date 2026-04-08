@@ -9,7 +9,6 @@ from app.models import AppSettings, _ALL_REVIEWERS
 from app.pipeline.helpers import (
     ApprovalGate,
     _extract_comment_ids,
-    _make_env,
     _parse_stage_announcement,
     _reviewer_prompt,
     parse_review_json,
@@ -191,20 +190,6 @@ class TestApprovalGate:
     def test_resolve_without_wait_does_not_raise(self):
         gate = ApprovalGate()
         gate.resolve(approved=True)  # should not raise
-
-
-class TestMakeEnv:
-    def test_always_unsets_claudecode(self):
-        env = _make_env(AppSettings())
-        assert env.get("CLAUDECODE") == ""
-
-    def test_no_base_url_when_empty(self):
-        env = _make_env(AppSettings(api_base_url=""))
-        assert "ANTHROPIC_BASE_URL" not in env
-
-    def test_sets_base_url_when_provided(self):
-        env = _make_env(AppSettings(api_base_url="https://proxy.example.com"))
-        assert env["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
 
 
 class TestExtractCommentIds:

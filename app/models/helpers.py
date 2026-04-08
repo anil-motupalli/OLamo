@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
 import os
-from ..constants import _DEFAULT_ENGINES, _CLAUDE_TIER, _COPILOT_DEFAULTS
+from ..constants import _DEFAULT_ENGINES, _ENGINE_DEFAULT_MODELS
 from .model_config import ModelConfig
 from .agent_engine_config import AgentEngineConfig
 from .app_settings import AppSettings
@@ -59,12 +59,26 @@ def resolve_secret(value: str) -> str:
 
 def get_default_engine_config(role: str, settings: AppSettings) -> AgentEngineConfig:
     engine = _DEFAULT_ENGINES.get(role, "claude")
-    if engine == "copilot":
-        model = _COPILOT_DEFAULTS.get(role, "")
-    else:
-        tier_field = _CLAUDE_TIER.get(role, "sonnet_model")
-        model = getattr(settings, tier_field)
+    model = _resolve_default_model(role, engine, settings)
     return AgentEngineConfig(engine=engine, model_config=ModelConfig(model=model))
+
+
+def _resolve_default_model(role: str, engine: str, settings: AppSettings) -> str:
+    """Resolve the default model for a (role, engine) pair.
+
+    Uses the unified ``engine_default_models`` map from defaults.json.
+    For Claude engine entries that reference a settings attribute (e.g. ``opus_model``),
+    the attribute is resolved from the ``settings`` object.  All other entries are
+    returned as literal model name strings.
+    """
+    engine_models = _ENGINE_DEFAULT_MODELS.get(role, {})
+    model_ref = engine_models.get(engine, "")
+    if not model_ref:
+        return ""
+    # Claude engine entries reference AppSettings attributes (e.g. "opus_model")
+    if engine == "claude":
+        return getattr(settings, model_ref, model_ref)
+    return model_ref
 
 
 def _agent_engine_config_from_dict(d: dict) -> AgentEngineConfig:

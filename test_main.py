@@ -9,7 +9,6 @@ discovers and runs the full suite.
 """
 
 # ruff: noqa: F401, F403
-from tests.test_utils import TestReverseString
 from tests.test_models import (
     TestAppSettings,
     TestModelConfig,
@@ -28,8 +27,11 @@ from tests.test_helpers import (
     TestReviewerPrompt,
     TestBuildPmPrompt,
     TestApprovalGate,
-    TestMakeEnv,
     TestExtractCommentIds,
+    TestParseBuildOutput,
+    TestParseFindingResponses,
+    TestParseRepoOutput,
+    TestParseReviewJson,
 )
 from tests.test_settings import TestSettingsStore
 from tests.test_broadcaster import TestSseBroadcaster
@@ -51,5 +53,6 @@ from tests.test_engines import (
     TestCopilotEngine,
     TestOpenAIEngine,
     TestHeadlessMode,
+    TestEngineRegistry,
 )
 

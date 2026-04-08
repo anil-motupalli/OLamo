@@ -21,21 +21,13 @@
       "build-agent":    "copilot",
       "repo-manager":   "copilot"
     },
-    "claude_tiers": {
-      "lead-developer": "opus_model",
-      "developer":      "sonnet_model",
-      "code-reviewer":  "opus_model",
-      "qa-engineer":    "opus_model",
-      "build-agent":    "haiku_model",
-      "repo-manager":   "haiku_model"
-    },
-    "copilot_models": {
-      "lead-developer": "claude-opus-4-6",
-      "developer":      "claude-sonnet-4-6",
-      "code-reviewer":  "codex",
-      "qa-engineer":    "gpt-5.4",
-      "build-agent":    "gpt-5-mini",
-      "repo-manager":   "gpt-5-mini"
+    "engine_default_models": {
+      "lead-developer": { "claude": "opus_model", "copilot": "claude-opus-4-6", "codex": "codex", "openai": "gpt-5.4" },
+      "developer":      { "claude": "sonnet_model", "copilot": "claude-sonnet-4-6", "codex": "codex", "openai": "gpt-5.4" },
+      "code-reviewer":  { "claude": "opus_model", "copilot": "codex", "codex": "codex", "openai": "gpt-5.4" },
+      "qa-engineer":    { "claude": "opus_model", "copilot": "gpt-5.4", "codex": "codex", "openai": "gpt-5.4" },
+      "build-agent":    { "claude": "haiku_model", "copilot": "gpt-5-mini", "codex": "codex-mini", "openai": "gpt-5-mini" },
+      "repo-manager":   { "claude": "haiku_model", "copilot": "gpt-5-mini", "codex": "codex-mini", "openai": "gpt-5-mini" }
     },
     "tools": {
       "lead-developer": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],

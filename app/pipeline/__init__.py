@@ -3,7 +3,6 @@
 from .helpers import (
     ApprovalGate,
     _extract_comment_ids,
-    _make_env,
     _parse_stage_announcement,
     _reviewer_prompt,
 )
@@ -14,7 +13,6 @@ from .runner import run_pipeline, run_pipeline_cli
 __all__ = [
     "ApprovalGate",
     "_extract_comment_ids",
-    "_make_env",
     "_parse_stage_announcement",
     "_reviewer_prompt",
     "run_pipeline_pm",

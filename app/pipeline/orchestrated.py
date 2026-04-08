@@ -11,13 +11,12 @@ from typing import Awaitable, Callable
 
 from ..models import (
     AppSettings,
-    _COPILOT_DEFAULTS,
-    _CLAUDE_TIER,
     _ALL_REVIEWERS,
     get_default_engine_config,
+    _resolve_default_model,
 )
 from ..agents import AGENT_CONFIGS
-from ..engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
+from ..engines import AgentEngine, ENGINE_REGISTRY
 from .helpers import _reviewer_prompt, _extract_comment_ids, parse_review_json, parse_finding_responses, parse_build_output, parse_repo_output, _build_failed, _build_failure_summary, FINDING_RESPONSES_SEP
 
 
@@ -55,7 +54,7 @@ async def run_pipeline_orchestrated(
 
     if settings.headless:
         # Headless / dry-run: one MockEngine handles every role; no API calls made.
-        mock_engine: AgentEngine = MockEngine(settings)
+        mock_engine: AgentEngine = ENGINE_REGISTRY["mock"](settings)
         await mock_engine.start()
         engines_to_stop.append(mock_engine)
 
@@ -68,41 +67,27 @@ async def run_pipeline_orchestrated(
         def _engine_type(role: str) -> str:
             return (settings.agent_configs.get(role) or get_default_engine_config(role, settings)).engine
 
-        used_engines = {_engine_type(r) for r in AGENT_CONFIGS}
+        used_engine_names = {_engine_type(r) for r in AGENT_CONFIGS}
+        engine_instances: dict[str, AgentEngine] = {}
 
-        claude_engine: AgentEngine = ClaudeEngine(settings)
-        copilot_engine: AgentEngine | None = CopilotEngine(settings) if "copilot" in used_engines else None
-        codex_engine: AgentEngine | None = CodexEngine(settings) if "codex" in used_engines else None
-        openai_engine: AgentEngine | None = OpenAIEngine(settings) if "openai" in used_engines else None
-
-        await claude_engine.start()
-        engines_to_stop.append(claude_engine)
-        if copilot_engine:
-            if db_conn is not None:
-                copilot_engine.set_db_conn(db_conn)
-            await copilot_engine.start()
-            engines_to_stop.append(copilot_engine)
-        if codex_engine:
-            await codex_engine.start()
-            engines_to_stop.append(codex_engine)
-        if openai_engine:
-            await openai_engine.start()
-            engines_to_stop.append(openai_engine)
+        for name in used_engine_names:
+            cls = ENGINE_REGISTRY.get(name)
+            if cls is None:
+                raise ValueError(f"Unknown engine '{name}'. Available: {list(ENGINE_REGISTRY.keys())}")
+            instance = cls(settings)
+            # Wire DB connection for engines that support it
+            if name == "copilot" and db_conn is not None:
+                instance.set_db_conn(db_conn)
+            await instance.start()
+            engine_instances[name] = instance
+            engines_to_stop.append(instance)
 
         def _resolve(role: str) -> tuple[AgentEngine, str, object, dict]:
             cfg = settings.agent_configs.get(role) or get_default_engine_config(role, settings)
-            if cfg.engine == "copilot" and copilot_engine:
-                eng = copilot_engine
-            elif cfg.engine == "codex" and codex_engine:
-                eng = codex_engine
-            elif cfg.engine == "openai" and openai_engine:
-                eng = openai_engine
-            else:
-                eng = claude_engine
-            model = cfg.model_config.model or (
-                _COPILOT_DEFAULTS.get(role, "") if cfg.engine == "copilot"
-                else getattr(settings, _CLAUDE_TIER.get(role, "sonnet_model"))
-            )
+            eng = engine_instances.get(cfg.engine)
+            if eng is None:
+                raise ValueError(f"Engine '{cfg.engine}' required for role '{role}' but not started")
+            model = cfg.model_config.model or _resolve_default_model(role, cfg.engine, settings)
             return eng, model, cfg.model_config, cfg.mcp_servers
 
     async def call(role: str, prompt: str) -> str:
@@ -220,8 +205,8 @@ async def run_pipeline_orchestrated(
             # Build the human-review spec: full design plan + QA's final assessment
             spec_for_review = plan
 
-            # Optional human approval gate after design loop — skipped in headless mode
-            if on_approval_required is not None and not settings.headless:
+            # Optional human approval gate after design loop — only when QA has approved, skipped in headless mode
+            if on_approval_required is not None and not settings.headless and qa_approved:
                 dev_response = ""  # developer's response to show on subsequent rounds
                 while True:
                     gate_result = await on_approval_required(spec_for_review, dev_response)
@@ -305,7 +290,7 @@ async def run_pipeline_orchestrated(
                                       "file": None, "line": 0,
                                       "description": f"Build failed after {settings.max_build_cycles} retries",
                                       "suggestion": _build_failure_summary(build_parsed)[:500]}]
-                    break
+                    continue  # don't break — let the cycle log and checkpoint before the loop ends
 
                 # Code review — pass developer's per-finding JSON responses so reviewers can weigh pushbacks
                 diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
@@ -326,10 +311,14 @@ async def run_pipeline_orchestrated(
                         if review["decision"] == "Approved":
                             already_approved.add(role)
 
-                # Re-invite approved reviewers if any pending reviewer found critical issues
+                # Re-invite approved reviewers only if pending reviewers found critical issues AND
+                # the developer is actually addressing them (not purely pushing back).
                 combined_findings = [f for rv in reviewer_results.values() for f in rv.get("findings", [])]
                 has_critical = any(f.get("severity") in ("Critical", "MustHave") for f in combined_findings)
-                if has_critical and already_approved:
+                developer_addressing = not dev_responses or any(
+                    r.get("action", "ADDRESSED").upper() != "PUSHBACK" for r in dev_responses
+                )
+                if has_critical and developer_addressing and already_approved:
                     reinvite = list(already_approved)
                     re_results = await asyncio.gather(
                         *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_resp_ctx) for r in reinvite]
@@ -339,6 +328,11 @@ async def run_pipeline_orchestrated(
                         reviewer_results[role] = review
                         if review["decision"] == "NeedsImprovement":
                             already_approved.discard(role)
+                elif has_critical and not developer_addressing:
+                    await on_event({
+                        "type": "agent_message", "role": "orchestrator",
+                        "text": f"Developer is pushing back on all critical findings — skipping re-invite of approved reviewer(s): {', '.join(sorted(already_approved))}",
+                    })
                 elif already_approved:
                     await on_event({
                         "type": "agent_message", "role": "orchestrator",
@@ -363,6 +357,14 @@ async def run_pipeline_orchestrated(
 
                 if not impl_findings:
                     break
+
+            # Guard: only proceed to commit if every reviewer has approved.
+            unapproved = set(_ALL_REVIEWERS) - already_approved
+            if unapproved:
+                raise RuntimeError(
+                    f"Implementation cycle exhausted ({settings.max_impl_cycles} cycles) "
+                    f"without approval from: {', '.join(sorted(unapproved))}"
+                )
 
             # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
             await stage("Stage 3: Commit & PR", cycle=0)
@@ -473,8 +475,9 @@ async def run_pipeline_orchestrated(
         return f"Pipeline complete. PR: {pr_result[:200]}"
     finally:
         # Close per-run sessions for CopilotEngine (disconnects, marks DB closed)
+        CopilotEngine = ENGINE_REGISTRY.get("copilot")
         for eng in engines_to_stop:
-            if isinstance(eng, CopilotEngine) and run_id:
+            if CopilotEngine and isinstance(eng, CopilotEngine) and run_id:
                 try:
                     await eng.close_run(run_id)
                 except Exception:

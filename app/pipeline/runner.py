@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from claude_agent_sdk import CLIConnectionError, CLINotFoundError, ClaudeSDKError
-
 from ..models import AppSettings
 from ..settings import SettingsStore
 from .pm import run_pipeline_pm
@@ -81,12 +79,11 @@ async def run_pipeline_cli(
         print("Pipeline Complete")
         print(f"{'=' * 60}")
         print(result)
-    except CLINotFoundError:
-        print("Error: Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code")
-        sys.exit(1)
-    except CLIConnectionError as e:
-        print(f"Error: Could not connect to Claude Code CLI: {e}")
-        sys.exit(1)
-    except ClaudeSDKError as e:
-        print(f"Error: SDK error: {e}")
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"Error: {e}")
         sys.exit(1)

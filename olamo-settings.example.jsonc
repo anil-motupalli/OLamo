@@ -20,7 +20,7 @@
   "copilot_github_token": "",     // GitHub token for Copilot engine (leave empty to use gh CLI auth)
 
   // ── Per-agent engine & model overrides ──
-  // Each agent can use "claude" or "copilot" engine independently.
+  // Each agent can use any engine: "claude", "copilot", "codex", "openai", or "mock".
   // Only "orchestrated" mode supports mixed engines; "pm" mode uses Claude for all agents.
   //
   // model_config.mode:
@@ -33,7 +33,7 @@
   // Available roles: lead-developer, developer, code-reviewer, qa-engineer, build-agent, repo-manager
   "agent_configs": {
     "lead-developer": {
-      "engine": "claude",         // "claude" or "copilot"
+      "engine": "claude",         // "claude" | "copilot" | "codex" | "openai" | "mock"
       "model_config": {
         "mode": "simple",         // "simple" or "advanced"
         "model": "opus",          // Model name (e.g. "opus", "sonnet", "gpt-5.4", "codex")

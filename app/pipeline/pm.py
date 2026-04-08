@@ -15,7 +15,8 @@ from claude_agent_sdk import (
 
 from ..models import AppSettings
 from ..agents import build_agents, build_pm_prompt
-from .helpers import _make_env, _parse_stage_announcement
+from ..engines.claude import _make_env
+from .helpers import _parse_stage_announcement
 
 
 async def run_pipeline_pm(

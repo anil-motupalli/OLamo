@@ -26,6 +26,7 @@ from .constants import (
     MAX_PR_CYCLES,
     _ALL_REVIEWERS,
     _DEFAULT_ENGINES,
+    _ENGINE_DEFAULT_MODELS,
     _CLAUDE_TIER,
     _COPILOT_DEFAULTS,
     AGENT_TOOLS,
@@ -39,12 +40,13 @@ from .models import (
     AgentEngineConfig,
     AppSettings,
     get_default_engine_config,
+    _resolve_default_model,
     _agent_engine_config_from_dict,
     _settings_from_dict,
 )
 
-# Engine classes
-from .engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
+# Engine classes and registry
+from .engines import AgentEngine, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine, ENGINE_REGISTRY
 
 # Agents and prompts
 from .agents import (
@@ -66,7 +68,6 @@ from .settings import SettingsStore
 from .pipeline import (
     ApprovalGate,
     _extract_comment_ids,
-    _make_env,
     _parse_stage_announcement,
     _reviewer_prompt,
     run_pipeline_pm,
@@ -101,8 +102,10 @@ __all__ = [
     "AppSettings",
     "_COPILOT_DEFAULTS",
     "_DEFAULT_ENGINES",
+    "_ENGINE_DEFAULT_MODELS",
     "_CLAUDE_TIER",
     "get_default_engine_config",
+    "_resolve_default_model",
     "_agent_engine_config_from_dict",
     "_settings_from_dict",
     # Engines
@@ -112,6 +115,7 @@ __all__ = [
     "CodexEngine",
     "OpenAIEngine",
     "MockEngine",
+    "ENGINE_REGISTRY",
     # Agents
     "AGENT_CONFIGS",
     "build_agents",
@@ -127,7 +131,6 @@ __all__ = [
     # Pipeline
     "ApprovalGate",
     "_extract_comment_ids",
-    "_make_env",
     "_parse_stage_announcement",
     "_reviewer_prompt",
     "run_pipeline_pm",

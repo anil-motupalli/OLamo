@@ -1,4 +1,4 @@
-"""Pipeline helpers: _make_env, _parse_stage_announcement,
+"""Pipeline helpers: _parse_stage_announcement,
 _reviewer_prompt, _extract_comment_ids, parse_review_json,
 parse_finding_responses."""
 
@@ -23,14 +23,6 @@ FINDING_RESPONSES_SEP = "---FINDING_RESPONSES---"
 def _parse_stage_announcement(text: str) -> str | None:
     m = _STAGE_RE.search(text)
     return m.group(0) if m else None
-
-
-def _make_env(settings: AppSettings) -> dict[str, str]:
-    """Build the subprocess env dict: bypass nested-session guard + optional base URL."""
-    env: dict[str, str] = {"CLAUDECODE": ""}
-    if settings.api_base_url:
-        env["ANTHROPIC_BASE_URL"] = settings.api_base_url
-    return env
 
 
 def _reviewer_prompt(role: str, plan: str, diff_ctx: str) -> str:

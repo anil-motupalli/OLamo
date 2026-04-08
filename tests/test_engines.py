@@ -551,3 +551,84 @@ class TestHeadlessMode:
 
         assert captured.get("base_url") == "https://api.z.ai/api/coding/paas/v4"
         assert captured.get("api_key") == "test-key"
+
+
+class TestEngineRegistry:
+    """Tests for ENGINE_REGISTRY and unified model resolution."""
+
+    def test_registry_contains_all_engine_names(self):
+        from app.engines import ENGINE_REGISTRY
+        expected = {"claude", "copilot", "codex", "openai", "mock"}
+        assert set(ENGINE_REGISTRY.keys()) == expected
+
+    def test_registry_maps_to_correct_classes(self):
+        from app.engines import ENGINE_REGISTRY, ClaudeEngine, CopilotEngine, CodexEngine, OpenAIEngine, MockEngine
+        assert ENGINE_REGISTRY["claude"] is ClaudeEngine
+        assert ENGINE_REGISTRY["copilot"] is CopilotEngine
+        assert ENGINE_REGISTRY["codex"] is CodexEngine
+        assert ENGINE_REGISTRY["openai"] is OpenAIEngine
+        assert ENGINE_REGISTRY["mock"] is MockEngine
+
+    def test_resolve_default_model_claude_uses_settings_attribute(self):
+        from app.models import _resolve_default_model, AppSettings
+        s = AppSettings(opus_model="my-opus")
+        model = _resolve_default_model("lead-developer", "claude", s)
+        assert model == "my-opus"
+
+    def test_resolve_default_model_copilot_uses_literal(self):
+        from app.models import _resolve_default_model, AppSettings
+        model = _resolve_default_model("code-reviewer", "copilot", AppSettings())
+        assert model == "codex"
+
+    def test_resolve_default_model_openai_uses_literal(self):
+        from app.models import _resolve_default_model, AppSettings
+        model = _resolve_default_model("qa-engineer", "openai", AppSettings())
+        assert model == "gpt-5.4"
+
+    def test_resolve_default_model_unknown_engine_returns_empty(self):
+        from app.models import _resolve_default_model, AppSettings
+        model = _resolve_default_model("lead-developer", "nonexistent", AppSettings())
+        assert model == ""
+
+    def test_resolve_default_model_unknown_role_returns_empty(self):
+        from app.models import _resolve_default_model, AppSettings
+        model = _resolve_default_model("nonexistent-role", "claude", AppSettings())
+        assert model == ""
+
+    def test_get_default_engine_config_uses_unified_map(self):
+        from app.models import get_default_engine_config, AppSettings
+        # Default for lead-developer is "claude" engine
+        cfg = get_default_engine_config("lead-developer", AppSettings())
+        assert cfg.engine == "claude"
+        assert cfg.model_config.model == AppSettings().opus_model
+
+    def test_get_default_engine_config_for_copilot_default_role(self):
+        from app.models import get_default_engine_config, AppSettings
+        # Default for code-reviewer is "copilot"
+        cfg = get_default_engine_config("code-reviewer", AppSettings())
+        assert cfg.engine == "copilot"
+        assert cfg.model_config.model == "codex"
+
+    def test_legacy_claude_tier_compat(self):
+        """_CLAUDE_TIER still works as a legacy alias."""
+        from app.constants import _CLAUDE_TIER
+        assert _CLAUDE_TIER["lead-developer"] == "opus_model"
+        assert _CLAUDE_TIER["developer"] == "sonnet_model"
+        assert _CLAUDE_TIER["build-agent"] == "haiku_model"
+
+    def test_legacy_copilot_defaults_compat(self):
+        """_COPILOT_DEFAULTS still works as a legacy alias."""
+        from app.constants import _COPILOT_DEFAULTS
+        assert _COPILOT_DEFAULTS["code-reviewer"] == "codex"
+        assert _COPILOT_DEFAULTS["qa-engineer"] == "gpt-5.4"
+
+    def test_engine_default_models_has_all_roles(self):
+        from app.constants import _ENGINE_DEFAULT_MODELS
+        roles = {"lead-developer", "developer", "code-reviewer", "qa-engineer", "build-agent", "repo-manager"}
+        assert set(_ENGINE_DEFAULT_MODELS.keys()) == roles
+
+    def test_engine_default_models_has_all_engines_per_role(self):
+        from app.constants import _ENGINE_DEFAULT_MODELS
+        engines = {"claude", "copilot", "codex", "openai"}
+        for role, model_map in _ENGINE_DEFAULT_MODELS.items():
+            assert set(model_map.keys()) == engines, f"{role} missing engines: {engines - set(model_map.keys())}"

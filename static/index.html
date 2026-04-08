@@ -1474,11 +1474,11 @@ function app() {
         this.currentAgent = null;
         this.currentAgentLastMsg = '';
         this.loadRuns();
-        if (evt.run_id === this.approvalRunId) {
+        if (evt.id === this.approvalRunId) {
           this.approvalPending = false;
           if (this.view === 'design-review') this.view = 'run';
         }
-        if (this.selectedRun && evt.run_id && evt.run_id === this.selectedRun.id) {
+        if (this.selectedRun && evt.id && evt.id === this.selectedRun.id) {
           this.runDetail.events.push(evt);
         }
         return;
@@ -1513,7 +1513,7 @@ function app() {
       if (evt.type === 'stage_changed') this.currentStage = evt.stage;
 
       // Append to run detail if viewing this run
-      if (this.selectedRun && evt.run_id && evt.run_id === this.selectedRun.id) {
+      if (this.selectedRun && evt.id && evt.id === this.selectedRun.id) {
         this.runDetail.events.push(evt);
         if (evt.type === 'stage_changed') this._stagesReached.add(evt.stage);
         this.$nextTick(() => {
@@ -1524,7 +1524,7 @@ function app() {
 
       // Approval gate
       if (evt.type === 'awaiting_approval') {
-        this.approvalRunId = evt.run_id;
+        this.approvalRunId = evt.id;
         this.approvalSpecSummary = evt.specSummary || '';
         this.approvalSeq = evt.seq;
         this.approvalDevResponse = evt.developerResponse || '';
@@ -1533,27 +1533,27 @@ function app() {
         this.showRevisePanel = false;
         this.approvalPending = true;
         // Ensure run is loaded into selectedRun
-        if (!this.selectedRun || this.selectedRun.id !== evt.run_id) {
-          const run = this.runs.find(r => r.id === evt.run_id);
+        if (!this.selectedRun || this.selectedRun.id !== evt.id) {
+          const run = this.runs.find(r => r.id === evt.id);
           if (run) {
             this.selectedRun = run;
             this.runDetail = { events: [] };
             this._agentState = {};
             this._stagesReached = new Set();
-            fetch('/api/runs/' + evt.run_id + '/events')
+            fetch('/api/runs/' + evt.id + '/events')
               .then(r => r.json())
               .then(events => { this.runDetail = { events }; })
               .catch(() => {});
           }
         }
         // Load spec and navigate to design-review
-        this.fetchSpecContent(evt.run_id, evt.seq)
+        this.fetchSpecContent(evt.id, evt.seq)
           .then(() => { this.view = 'design-review'; })
           .catch(() => { this.view = 'design-review'; });
       }
       // Gate resolved — update state (events array already updated above)
       if (evt.type === 'design_approval_received') {
-        if (this.approvalRunId === evt.run_id && this.view === 'design-review') {
+        if (this.approvalRunId === evt.id && this.view === 'design-review') {
           this.view = 'run';
         }
         this.approvalPending = false;

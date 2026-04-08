@@ -93,6 +93,10 @@ class SettingsStore:
 
     async def unlock(self) -> None:
         async with self._lock:
+            if self._active_runs <= 0:
+                logger.warning("unlock() called with _active_runs=%d — clamping to 0", self._active_runs)
+                self._active_runs = 0
+                return
             self._active_runs -= 1
             if self._active_runs == 0 and self._pending is not None:
                 self._settings = self._pending

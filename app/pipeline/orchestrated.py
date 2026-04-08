@@ -11,7 +11,6 @@ from typing import Awaitable, Callable
 
 from ..models import (
     AppSettings,
-    _ENGINE_DEFAULT_MODELS,
     _ALL_REVIEWERS,
     get_default_engine_config,
     _resolve_default_model,
@@ -206,8 +205,8 @@ async def run_pipeline_orchestrated(
             # Build the human-review spec: full design plan + QA's final assessment
             spec_for_review = plan
 
-            # Optional human approval gate after design loop — skipped in headless mode
-            if on_approval_required is not None and not settings.headless:
+            # Optional human approval gate after design loop — only when QA has approved, skipped in headless mode
+            if on_approval_required is not None and not settings.headless and qa_approved:
                 dev_response = ""  # developer's response to show on subsequent rounds
                 while True:
                     gate_result = await on_approval_required(spec_for_review, dev_response)
@@ -291,7 +290,7 @@ async def run_pipeline_orchestrated(
                                       "file": None, "line": 0,
                                       "description": f"Build failed after {settings.max_build_cycles} retries",
                                       "suggestion": _build_failure_summary(build_parsed)[:500]}]
-                    break
+                    continue  # don't break — let the cycle log and checkpoint before the loop ends
 
                 # Code review — pass developer's per-finding JSON responses so reviewers can weigh pushbacks
                 diff_ctx = f"\nGit diff for context:\n{last_diff}" if last_diff else ""
@@ -312,10 +311,14 @@ async def run_pipeline_orchestrated(
                         if review["decision"] == "Approved":
                             already_approved.add(role)
 
-                # Re-invite approved reviewers if any pending reviewer found critical issues
+                # Re-invite approved reviewers only if pending reviewers found critical issues AND
+                # the developer is actually addressing them (not purely pushing back).
                 combined_findings = [f for rv in reviewer_results.values() for f in rv.get("findings", [])]
                 has_critical = any(f.get("severity") in ("Critical", "MustHave") for f in combined_findings)
-                if has_critical and already_approved:
+                developer_addressing = not dev_responses or any(
+                    r.get("action", "ADDRESSED").upper() != "PUSHBACK" for r in dev_responses
+                )
+                if has_critical and developer_addressing and already_approved:
                     reinvite = list(already_approved)
                     re_results = await asyncio.gather(
                         *[call(r, _reviewer_prompt(r, plan, diff_ctx) + dev_resp_ctx) for r in reinvite]
@@ -325,6 +328,11 @@ async def run_pipeline_orchestrated(
                         reviewer_results[role] = review
                         if review["decision"] == "NeedsImprovement":
                             already_approved.discard(role)
+                elif has_critical and not developer_addressing:
+                    await on_event({
+                        "type": "agent_message", "role": "orchestrator",
+                        "text": f"Developer is pushing back on all critical findings — skipping re-invite of approved reviewer(s): {', '.join(sorted(already_approved))}",
+                    })
                 elif already_approved:
                     await on_event({
                         "type": "agent_message", "role": "orchestrator",
@@ -349,6 +357,14 @@ async def run_pipeline_orchestrated(
 
                 if not impl_findings:
                     break
+
+            # Guard: only proceed to commit if every reviewer has approved.
+            unapproved = set(_ALL_REVIEWERS) - already_approved
+            if unapproved:
+                raise RuntimeError(
+                    f"Implementation cycle exhausted ({settings.max_impl_cycles} cycles) "
+                    f"without approval from: {', '.join(sorted(unapproved))}"
+                )
 
             # ── Stage 3: Commit & PR ──────────────────────────────────────────────────
             await stage("Stage 3: Commit & PR", cycle=0)

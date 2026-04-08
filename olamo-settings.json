@@ -17,7 +17,7 @@
         "model": "glm-5v-turbo",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}
@@ -29,7 +29,7 @@
         "model": "glm-5.1",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}
@@ -41,7 +41,7 @@
         "model": "glm-5.1",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}
@@ -53,7 +53,7 @@
         "model": "glm-5.1",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}
@@ -65,7 +65,7 @@
         "model": "glm-5",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}
@@ -77,7 +77,7 @@
         "model": "glm-5",
         "provider_type": "openai",
         "base_url": "https://api.z.ai/api/coding/paas/v4",
-        "api_key": "886e31f440a94ec0b1da7de9f9e86c55.rFIwxmUdNwWPNiiX",
+        "api_key": "env:OLAMO_ZAI_API_KEY",
         "extra_params": {}
       },
       "mcp_servers": {}

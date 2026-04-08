@@ -504,12 +504,28 @@ class TestOrchestrationEngineRouting:
     async def test_claude_engine_agents_invoke_query(self):
         """Agents configured for claude engine go through ClaudeEngine (query())."""
         from claude_agent_sdk import ResultMessage
+
+        _CANNED = {
+            "build":    '{"status": "BUILD SUCCESS", "output": "ok", "build_errors": [], "test_failures": []}',
+            "review":   '{"decision": "Approved", "findings": []}',
+            "repo":     '{"mode": "commit_pr", "pr_url": "https://github.com/mock/repo/pull/1", "pr_number": 1, "diff": "diff"}\n{"mode": "poll_comments", "status": "NO ACTIONABLE COMMENTS", "count": 0, "comments": []}',
+            "default":  "done",
+        }
         query_calls = []
 
         async def fake_query(**kwargs):
             query_calls.append(kwargs)
+            p = kwargs.get("prompt", "").upper()
+            if "BUILD AND TEST" in p:
+                result = _CANNED["build"]
+            elif any(k in p for k in ("COMMIT ALL CHANGES", "POLL CI", "POLL PR", "PUSH CHANGES", "MARK COMMENTS")):
+                result = _CANNED["repo"]
+            elif "REVIEW" in p:
+                result = _CANNED["review"]
+            else:
+                result = _CANNED["default"]
             mock = MagicMock(spec=ResultMessage)
-            mock.result = "APPROVED"
+            mock.result = result
             yield mock
 
         settings = AppSettings(
